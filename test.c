@@ -158,6 +158,9 @@ next:
 		ptr++;
 		continue;
 	}
+	
+	av = realloc(av, sizeof(char *) * (ac+1));
+	av[ac] = NULL;
 
 	*argc = ac;
 	*argv = av;

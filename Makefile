@@ -1,14 +1,11 @@
 CC:=/home/build/opt/host/bin/tcc
 CFLAGS:=-std=c99 -Wpedantic -Wall -Wextra
 LDFLAGS:=-static
+UTILS:=sh id kill true false ls cp
 
-default:	test id kill
+default:	$(UTILS)
 
 clean:
-		rm -f test test.o id id.o kill kill.o
-
-test:	test.c
-
-id:		id.c
+		rm -f $(UTILS)
 
 .PHONY:	default clean

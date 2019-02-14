@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <err.h>
 #include <sys/types.h>
-#include <dirent.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -14,38 +13,6 @@
 #include <libgen.h>
 
 #define BUF_SIZE	0x4000
-
-static int ls(int argc, char *argv[])
-{
-	DIR *dir = opendir(".");
-	if( dir == NULL ) {
-		fprintf(stderr, "%s: cannot access %s: %s", argv[0], ".", strerror(errno));
-		return errno;
-	}
-	struct dirent *ent = NULL;
-	do {
-		errno = 0;
-		ent = readdir(dir);
-		
-		if(ent == NULL && errno == 0) {
-			continue;
-		} else if(ent == NULL) {
-			fprintf(stderr, "%s: cannot read entry: %s", argv[0], strerror(errno));
-			continue;
-		} else if(ent->d_name[0] == '\0') {
-			continue;
-		} else {
-			if (ent->d_name[0] == '.')
-				continue;
-			printf("%s ", ent->d_name);
-		}
-
-		fflush(stdout);
-	} while(ent != NULL);
-	closedir(dir);
-	printf("\n");
-	return 0;
-}
 
 static int cat(int argc, char *argv[])
 {
@@ -260,9 +227,7 @@ int main(int ac, char *av[])
 		if(argc == 0 || argv == NULL || argv[0] == NULL)
 			continue;
 
-		if(!strcmp(argv[0], "ls")) {
-			builtin(ls, argc, argv);
-		} else if(!strcmp(argv[0], "cat")) {
+		if(!strcmp(argv[0], "cat")) {
 			builtin(cat, argc, argv);
 		} else if(!strcmp(argv[0], "cd")) {
 			cd(argc, argv);

@@ -25,6 +25,7 @@ static int isnumber(const char *str)
 	return 1;
 }
 
+/* FIXME move to cat.c */
 static int cmd_cat(int argc, char *argv[])
 {
 	FILE *in = stdin;
@@ -289,6 +290,8 @@ static int cmd_basename(int argc, char *argv[])
 
 int main(int ac, char *av[])
 {
+	printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
+
 	while(1)
 	{
 		if (printf("# ") < 0)

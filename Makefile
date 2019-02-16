@@ -30,7 +30,7 @@ exec_prefix := $(prefix)
 bindir      := $(exec_prefix)/bin
 sbindir     := $(exec_prefix)/sbin
 libexecdir  := $(exec_prefix)/libexec
-docdir      := @@DOCDIR@@
+docdir      := $(datarootdir)/doc
 infodir     := $(datarootdir)/info
 libdir      := $(prefix)/lib
 mandir      := $(datarootdir)/man
@@ -38,7 +38,7 @@ localedir   := $(datarootdir)/locale
 
 all_SRCS		:= $(wildcard $(srcdir)/src/*.c)
 all_HEADERS		:= $(wildcard $(srcdir)/src/*.h)
-all_PACKAGES	:= $(addprefix $(objdir)/,$(notdir $(all_SRCS:.c=)))
+all_PACKAGES	:= $(addprefix $(objdir)/bin/,$(notdir $(all_SRCS:.c=)))
 package_OBJS	:= $(addprefix $(objdir)/,$(notdir $(all_SRCS:.c=.o)))
 
 ifeq ($(DEPS),1)
@@ -53,7 +53,7 @@ all: $(all_PACKAGES) $(objdir)/.d
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
 
-$(all_PACKAGES): $(objdir)/%: $(objdir)/%.o
+$(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@
 
 
@@ -67,9 +67,10 @@ uninstall:
 .PHONY: mostly-clean clean distclean maintainer-clean
 
 mostlyclean:
-	$(RM) $(all_PACKAGES) $(package_OBJS)
+	$(RM) $(package_OBJS)
 
 clean: mostlyclean
+	$(RM) $(all_PACKAGES)
 
 distclean: clean
 	$(RM) config.log

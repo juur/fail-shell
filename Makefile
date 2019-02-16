@@ -1,7 +1,7 @@
 CC:=/home/build/opt/host/bin/tcc
-CFLAGS:=-std=c99 -Wpedantic -Wall -Wextra
+CFLAGS:=-std=c99 -Wpedantic -Wall -Wextra -O2
 LDFLAGS:=-static
-UTILS:=sh id kill true false ls cp
+UTILS:=sh id kill true false ls cp test
 
 default:	$(UTILS)
 

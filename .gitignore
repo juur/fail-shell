@@ -4,6 +4,7 @@ lib
 *.txt
 bin
 lib64
+*.swp
 usr
 proc
 sys

@@ -15,6 +15,7 @@
 
 #define BUF_SIZE	0x4000
 
+/* check if a NULL terminated string is a valid sequence of digits */
 static int isnumber(const char *str)
 {
 	while(*str)
@@ -25,59 +26,28 @@ static int isnumber(const char *str)
 	return 1;
 }
 
-/* FIXME move to cat.c */
-static int cmd_cat(int argc, char *argv[])
+/* check if a NULL/length terminated string is a valid POSIX 'Name' */
+static int isname(const char *str, int max_len)
 {
-	FILE *in = stdin;
-	int is_stdin = 1;
+	if (!(*str == '_' || isalpha(*str))) return 0;
 
-	int ndelay = 0;
+	int len = 0;
 
+	while (*++str && (len++ < max_len))
 	{
-		int opt;
-		while ((opt = getopt(argc, argv, "u")) != -1) {
-			switch (opt) {
-				case 'u':
-					ndelay = 1;
-					break;
-				default:
-					fprintf(stderr, "Usage: %s [-u] [FILES...]\n", argv[0]);
-					exit(EXIT_FAILURE);
-			}
-		}
+		if (isalnum(*str)) continue;
+		else if (*str == '_') continue;
+		else return 0;
 	}
-
-	if(optind < argc) {
-		char *file = argv[optind];
-		if(file == NULL) return -1;
-		in = fopen(file, "r");
-		if(in == NULL) {
-			fprintf(stderr, "cat: %s: %s\n", file, strerror(errno));
-			return errno;
-		}
-		is_stdin = 0;
-	}
-
-	char buf[BUFSIZ];
-	int running = 1;
-
-	if(ndelay) {
-		setvbuf(stdin, NULL, _IONBF, 0);
-		setvbuf(stdin, NULL, _IONBF, 0);
-	}
-
-	while(running) {
-		if(fgets(buf, BUFSIZ, in) == NULL)
-			running = 0;
-		else if(fputs(buf, stdout) == EOF)
-			running = 0;
-	}
-
-	if(!is_stdin)
-		fclose(in);
-	return EXIT_SUCCESS;
+	return 1;
 }
 
+static inline int isnewline(const char c)
+{
+	return c == '\n';
+}
+
+/* umask builtin */
 static int cmd_umask(int argc, char *argv[])
 {
 	const char *usage = "Usage: umask [-S] [mask]";
@@ -124,6 +94,7 @@ static int cmd_umask(int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
+/* replace the current process with another, effectively implements exec */
 static int execute(int ac, char *av[])
 {
 	execvp(av[0], av);
@@ -131,6 +102,8 @@ static int execute(int ac, char *av[])
 	return EXIT_FAILURE;
 }
 
+/* execute a builtin in a seperate process. builtins that should run in the
+ * shell process, should not use this */
 static int builtin(int (*func)(int, char **), int ac, char **av)
 {
 	int status;
@@ -164,7 +137,11 @@ static int process_args(const char *buf, int *argc, char ***argv)
 	const char *ptr = buf;
 	int ac = 0;
 	char **av = NULL;
+	int in_single_quote = 0;
+	int in_double_quotes = 0;
 
+	/* outer loop, each interation skips unquoted spaces & unprintable characters
+	 * before processing a single argument, pushing onto *argv */
 	while(*ptr != '\0')
 	{
 		if(isspace(*ptr)) goto next;
@@ -172,9 +149,62 @@ static int process_args(const char *buf, int *argc, char ***argv)
 
 		int len = 0;
 		const char *tmp = ptr;
+
+		/* inner loop, extracts a single argument. handles single & double quotes
+		 * as well as backslask escapes */
+		while(*tmp && isprint(*tmp)) {
+			if (!in_single_quote && *tmp == '\\') {
+				if (!*(tmp+1)) {
+					warnx("trailing escape '\\' at end");
+					goto clean_nowarn;
+				}
+				memmove((void *)tmp, tmp+1, strlen(tmp));
+				len++;
+				tmp++;
+				continue;
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '\'') {
+				in_single_quote = 1;
+				ptr++;
+				len--;
+				tmp++;
+				continue;
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '"') {
+				in_double_quotes = 1;
+				ptr++;
+				len--;
+				tmp++;
+				continue;
+			} else if (in_single_quote && *tmp == '\'') {
+				in_single_quote = 0;
+				len++;
+				tmp++;
+				break;
+			} else if (in_double_quotes && *tmp == '"') {
+				in_double_quotes = 0;
+				len++;
+				tmp++;
+				break;
+			} else if (!in_single_quote && !in_double_quotes && isspace(*tmp)) {
+				break;
+			} 
+			if (!in_single_quote) {
+				//tmp = expand_dollar(++tmp);
+			}
+			len++;
+			tmp++;
+		}
+
+		if (in_single_quote) {
+			warnx("unterminated single quote");
+			goto clean_nowarn;
+		}
+
+		if (in_double_quotes) {
+			warnx("unterminated double quotes");
+			goto clean_nowarn;
+		}
 		
-		while(!isspace(*tmp) && isprint(*tmp++)) len++;
-		
+		/* if we have an argument, grow *argv and append a pointer */
 		if(len>0) {
 			char **nav = realloc(av, sizeof(char *) * (ac+1));
 			if (nav == NULL) goto clean_fail;
@@ -191,6 +221,7 @@ next:
 		continue;
 	}
 	
+	/* ensure *argv is NULL terminated */
 	char **nav = realloc(av, sizeof(char *) * (ac+1));
 	if (nav == NULL) goto clean_fail;
 	av = nav;
@@ -203,6 +234,8 @@ next:
 	return EXIT_SUCCESS;
 
 clean_fail:
+	warn(NULL);
+clean_nowarn:
 	if (av) {
 		for (int i = 0; i < ac; i++)
 		{
@@ -211,7 +244,6 @@ clean_fail:
 		}
 		free(av);
 	}
-	warn(NULL);
 	return EXIT_FAILURE;
 }
 
@@ -288,6 +320,12 @@ static int cmd_basename(int argc, char *argv[])
 	exit(EXIT_SUCCESS);
 }
 
+static void trim(char *buf)
+{
+	char *ptr = buf + strlen(buf) - 1;
+	while (*ptr && isspace(*ptr)) *ptr-- = '\0';
+}
+
 int main(int ac, char *av[])
 {
 	printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
@@ -311,7 +349,11 @@ int main(int ac, char *av[])
 		int argc = 0;
 		char **argv = NULL;
 
-		if (process_args(buf, &argc, &argv) != EXIT_SUCCESS)
+		/* skip leading and trailing white space */
+		while (*line && isspace(*line)) line++;
+		trim(line);
+
+		if (process_args(line, &argc, &argv) != EXIT_SUCCESS)
 			continue;
 
 		if(argc == 0 || argv == NULL || argv[0] == NULL)
@@ -319,9 +361,7 @@ int main(int ac, char *av[])
 		
 		int rc = 0;
 
-		if(!strcmp(argv[0], "cat")) {
-			rc = builtin(cmd_cat, argc, argv);
-		} else if(!strcmp(argv[0], "umask")) {
+		if(!strcmp(argv[0], "umask")) {
 			rc = cmd_umask(argc, argv);
 		} else if(!strcmp(argv[0], "cd")) {
 			rc = cmd_cd(argc, argv);

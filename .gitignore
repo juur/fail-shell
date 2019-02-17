@@ -3,7 +3,6 @@
 lib
 *.txt
 bin
-src
 lib64
 usr
 proc

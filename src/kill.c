@@ -60,9 +60,9 @@ static void list_signals()
 	while(signals[++i].name) {
 		printf("%s", signals[i].name);
 		if(!signals[i+1].name)
-			putchar('\n');
+			putchar_unlocked('\n');
 		else
-			putchar(' ');
+			putchar_unlocked(' ');
 	}
 	exit(EXIT_SUCCESS);
 }

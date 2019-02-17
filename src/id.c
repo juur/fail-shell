@@ -120,7 +120,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		putchar('\n');
+		putchar_unlocked('\n');
 
 	}
 

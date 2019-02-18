@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <limits.h>
 
 struct range {
 	int from;
@@ -24,15 +25,170 @@ static void show_usage(const char *message)
 	exit(EXIT_FAILURE);
 }
 
+static int inline min(int a, int b)
+{
+	return a < b ? a : b;
+}
+
 static int opt_bytes = 0;
 static int opt_chars = 0;
 static int opt_fields = 0;
 static int opt_no_split_chars = 0;
 static int opt_hide_unmatched = 0;
 static int opt_delim_not_default = 0;
+
 static char delim = '\t';
 
-struct range **parse_list(const char *string)
+static void cut_one_file_lines(FILE *fp, struct range **ranges, const char *filename)
+{
+	char buf[BUFSIZ];
+	char printed[BUFSIZ];
+	char *line;
+	int lines_read = 0;
+
+	while ((line = fgets(buf, BUFSIZ, fp)) != NULL)
+	{
+		int op = 0;
+		int len = strlen(line);
+		if (buf[len-1] != '\n')
+			errx(EXIT_FAILURE, "buffer overflow: %s: line %d", filename, lines_read);
+		/* skip back from newline and erase it */
+		buf[--len] = '\0';
+		lines_read++;
+		char *end = buf + len;
+
+		memset(printed, 0, len);
+		struct range *rg;
+
+		/* iterate over each range in the list */
+		for (int i = 0; (rg = ranges[i]); i++)
+		{
+
+			/* for bytes and chars */
+			if (opt_bytes || opt_chars ) 
+			{
+				int end = min(ranges[i]->to, len);
+				for (int pos = ranges[i]->from-1; pos < end; pos++) 
+				{
+					if(printed[pos]) continue;
+					printed[pos] = 1;
+					putchar(buf[pos]);
+					op++;
+				}
+			} 
+			/* for delimiter based */
+			else if (opt_fields) 
+			{
+				/* short circuit if no delim on the line */
+				if (!strchr(line, delim))
+					break;
+
+				int skip = -1;
+				int found = 0;
+
+				/* scan for unprinted ranges */
+				for (int i = rg->from-1; i<rg->to; i++)
+					if(!printed[i]) { skip = i; break; }
+
+				/* entire line already printed, don't bother */
+				if (skip == -1)
+					continue;
+
+				/* start at the beginning of the line */
+				char *first = line;
+
+				/* scan over each elemtent of the range x-y */
+				for (int j = 0; j<rg->to; j++)
+				{
+					/* have we ran out of line or trokens? */
+					if (!first || first+1 >= end)
+					{
+						break;
+					/* skip tokens before x in range:x-y */
+					} 
+					else if (j < rg->from-1) 
+					{
+						first = strchr(first+1, delim);
+						continue;
+					}
+					/* skip over the token itself */
+					else if (*first == ':') 
+					{
+						first++;
+					}
+
+					/* bump the number of found, needed, tokens and 
+					 * calculate the byte offset */
+					int first_off = first-line;
+					found++;
+
+					/* find the next token (x-y) or skip to the end (x-) */
+					char *next;
+					if (rg->to == INT_MAX)
+						next = end;
+					else
+						next = strchr(first+1, delim);
+
+					/* calculate the offset, if there is one */
+					int next_off = next ? next-line : len;
+
+					/* save the string length between first and next offsets */
+					int plen = next_off - first_off;
+
+					/* set the bytes as already printed */
+					memset(&printed[first_off], 1, plen);
+					
+					/* and print them */
+					fwrite(first, 1, plen, stdout);
+
+					/* record the fact we printed something for \n */
+					op++;
+
+					/* shuffle along */
+					first = next;
+				}
+			}
+		}
+
+		if (op) { 
+			putchar('\n');
+		}
+		else if (opt_fields && !opt_hide_unmatched)
+		{
+			puts(line);
+		}
+	}
+
+	if (feof(fp))
+		return;
+
+	err(EXIT_FAILURE, "%s", filename);
+}
+
+static int count_range(struct range **lst)
+{
+	int i;
+	for (i = 0; lst[i]; i++) ;
+	return i;
+}
+
+static int rangesort(const void *a, const void *b)
+{
+	struct range *r1 = *(struct range **)a;
+	struct range *r2 = *(struct range **)b;
+
+	int rc;
+
+	if (r1->from == r2->from) {
+		rc = r1->to - r2->to;
+	} else {
+		rc = r1->from - r2->from;
+	}
+
+	return rc;
+}
+
+static struct range **parse_list(const char *string)
 {
 	struct range **list = NULL;
 	int num_entries = 0;
@@ -90,7 +246,7 @@ struct range **parse_list(const char *string)
 				current->from = 0; // FIXME 0 or 1?
 			/* number- */
 			else if (current->to == -1)
-				; // FIXME is -1 ok?
+				current->to = INT_MAX; // FIXME is -1 ok?
 
 			if ((list = realloc(list, entry_l * (num_entries+1))) == NULL)
 				err(EXIT_FAILURE, NULL);
@@ -105,6 +261,7 @@ struct range **parse_list(const char *string)
 			current->to = -1;
 			
 			entry_pos = 0;
+
 			ptr++;
 		} else
 			errx(EXIT_FAILURE, "invalid character '%c'", *ptr);
@@ -115,6 +272,10 @@ struct range **parse_list(const char *string)
 		err(EXIT_FAILURE, NULL);
 	list[num_entries++] = NULL;
 
+	/* sort the entries in the list */
+	int list_len = count_range(list);
+	qsort(list, list_len, sizeof(struct range *), rangesort);
+
 	return list;
 }
 
@@ -122,6 +283,7 @@ int main(int argc, char *argv[])
 {
 	char *list_str = NULL;
 	struct range **range_list = NULL;
+	//int range_length = 0;
 
 	{
 		int opt;
@@ -185,9 +347,26 @@ int main(int argc, char *argv[])
 		range_list = parse_list(list_str);
 	}
 
-	for (int i = 0; range_list[i]; i++)
-	{
-		printf("%02d: %4d to %4d\n", i, range_list[i]->from, range_list[i]->to);
+	if (optind >= argc) {
+		cut_one_file_lines(stdin, range_list, "<stdin>");
+	} else {
+		for (int i = optind; i < argc; i++)
+		{
+			if (strcmp(argv[i], "-"))
+			{
+				FILE *file = NULL;
+				if ((file = fopen(argv[i], "r")) == NULL)
+					err(EXIT_FAILURE, "%s", argv[i]);
+				cut_one_file_lines(file, range_list, argv[i]);
+				fclose(file);
+			} 
+			else 
+			{
+				cut_one_file_lines(stdin, range_list, "<stdin>");
+			}
+					
+		}
 	}
-	fflush(stdout);
+
+	exit(EXIT_SUCCESS);
 }

@@ -20,12 +20,11 @@ static void show_usage(const char *message)
 	fprintf(stderr,
 			"Usage: cut -b list [-n] [file...]\n"
 			"       cut -c list [file...]\n"
-			"       cut -f list [-d delim] [-s] [file...]\n"
-		);
+			"       cut -f list [-d delim] [-s] [file...]\n");
 	exit(EXIT_FAILURE);
 }
 
-static int inline min(int a, int b)
+inline static int min(const int a, const int b)
 {
 	return a < b ? a : b;
 }
@@ -192,9 +191,10 @@ static struct range **parse_list(const char *string)
 {
 	struct range **list = NULL;
 	int num_entries = 0;
-	int entry_l = sizeof(struct range *);
 	struct range *current = NULL;
 	char *ptr = (char *)string;
+
+	const int entry_l = sizeof(struct range *);
 
 	int entry_pos = 0;
 
@@ -243,10 +243,10 @@ static struct range **parse_list(const char *string)
 				current->to = current->from;
 			/* -number */
 			else if (current->from == -1)
-				current->from = 0; // FIXME 0 or 1?
+				current->from = 0;
 			/* number- */
 			else if (current->to == -1)
-				current->to = INT_MAX; // FIXME is -1 ok?
+				current->to = INT_MAX;
 
 			if ((list = realloc(list, entry_l * (num_entries+1))) == NULL)
 				err(EXIT_FAILURE, NULL);
@@ -283,7 +283,6 @@ int main(int argc, char *argv[])
 {
 	char *list_str = NULL;
 	struct range **range_list = NULL;
-	//int range_length = 0;
 
 	{
 		int opt;
@@ -347,9 +346,11 @@ int main(int argc, char *argv[])
 		range_list = parse_list(list_str);
 	}
 
-	if (optind >= argc) {
+	if (optind >= argc) 
+	{
 		cut_one_file_lines(stdin, range_list, "<stdin>");
-	} else {
+	} else 
+	{
 		for (int i = optind; i < argc; i++)
 		{
 			if (strcmp(argv[i], "-"))

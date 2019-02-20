@@ -6,15 +6,16 @@
 #include <string.h>
 #include <err.h>
 #include <strings.h>
+#include <regex.h>
 
 static void show_usage()
 {
 	fprintf(stderr,
-			"Usage: grep [-E|-F] [-c|-l|-q] [-insvx] -e pattern_list [-e pattern_file]... \n"
+			"Usage: grep [-E|-F] [-c|-l|-q] [-insvx] -e pattern_lists [-e pattern_file]... \n"
 			"              [-f pattern_file]... [file...]\n"
-			"       grep [-E|-F] [-c|-l|-q] [-insvx] [-e pattern_list]...\n"
+			"       grep [-E|-F] [-c|-l|-q] [-insvx] [-e pattern_lists]...\n"
 			"              -f pattern_file... [-f pattern_file]... [file...]\n"
-			"       grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]\n"
+			"       grep [-E|-F] [-c|-l|-q] [-insvx] pattern_lists [file...]\n"
 		   );
 	exit(EXIT_FAILURE);
 }
@@ -34,11 +35,12 @@ static int total_files = 1;
 
 static int do_grep(char **patterns, char *file)
 {
-	FILE *fp;
+	FILE *fp = NULL;
 	int rc = 0;
 	int lineno = 0;
 	int fn_written = 0;
 	int total_match = 0;
+	int close_fd = 0;
 
 	if (file == NULL) {
 		fp = stdin;
@@ -46,12 +48,13 @@ static int do_grep(char **patterns, char *file)
 		if (!opt_supress_enoent)
 			warn("%s", file);
 		return EXIT_FAILURE;
-	}
+	} else
+		close_fd = 1;
 
 	while (1)
 	{
 		if (feof(fp)) break;
-		if (ferror(fp)) { rc = EXIT_FAILURE; break; }
+		if (ferror(fp)) { rc = 2; break; }
 
 		char buf[BUFSIZ];
 		char *line;
@@ -66,6 +69,7 @@ static int do_grep(char **patterns, char *file)
 		for (int i = 0; patterns[i]; i++)
 		{
 			pattern = patterns[i];
+
 			if (opt_strings) {
 				if (opt_match_entire_line && !opt_case_insensitive) match = !strcasecmp(line, pattern);
 				else if (opt_match_entire_line && opt_case_insensitive) match = !strcmp(line, pattern);
@@ -79,14 +83,20 @@ static int do_grep(char **patterns, char *file)
 		if ( (!match && opt_not_matching) || (match && !opt_not_matching) ) {
 			total_match++;
 			if (!opt_quiet) {
-				if (opt_write_filenames && !fn_written) {
-					fn_written = 1;
-					puts(file);
+				if (opt_write_filenames) {
+					if (!fn_written) {
+						fn_written = 1;
+						puts(file);
+					}
 				} else if (opt_write_count) {
 				} else {
-					if (opt_write_lineno) printf("%d:", lineno);
-					puts(line);
+					if (opt_write_lineno) 
+						printf("%d:", lineno);
+					fprintf(stdout, "%s", line);
 				}
+
+				if (feof(stdout) || ferror(stdout))
+					errx(EXIT_FAILURE, "problem with stdout");
 			}
 		}
 	}
@@ -97,14 +107,28 @@ static int do_grep(char **patterns, char *file)
 				printf("%s:", file);
 			printf("%d\n", total_match);
 		}
+
+		if (feof(stdout) || ferror(stdout))
+			errx(EXIT_FAILURE, "problem with stdout");
 	}
+
+	if (close_fd)
+		fclose(fp);
+
+	if (!rc)
+		rc = total_match ? 0 : 1;
 
 	return rc;
 }
 
+inline static int max(const int a, const int b)
+{
+	return a > b ? a : b;
+}
+
 inline static char **add_to_list(char **list, int *cnt, char *string)
 {
-	char **ret;
+	char **ret = NULL;
 
 	if ((ret = realloc(list, sizeof(char *) * (*cnt + 1))) == NULL)
 		err(EXIT_FAILURE, NULL);
@@ -121,10 +145,10 @@ inline static char **add_to_list(char **list, int *cnt, char *string)
 
 int main(int argc, char *argv[])
 {
-	char **pattern_list = NULL;
-	char **pattern_file = NULL;
-	int num_lists = 0;
-	int num_files = 0;
+	char **pattern_lists = NULL;
+	char **pattern_files = NULL;
+	int list_count = 0;
+	int file_count = 0;
 
 	/* get options */
 	{
@@ -144,19 +168,10 @@ int main(int argc, char *argv[])
 					opt_write_count = 1;
 					break;
 				case 'e':
-					pattern_list = add_to_list(pattern_list, &num_lists, optarg);
-					// TODO add_to_list(&pattern_list, &num_lists, optarg);
-					if ((pattern_list = realloc(pattern_list, sizeof(char *) * (num_lists + 1))) == NULL)
-						err(EXIT_FAILURE, NULL);
-					if ((pattern_list[num_lists++] = strdup(optarg)) == NULL)
-						err(EXIT_FAILURE, NULL);
+					pattern_lists = add_to_list(pattern_lists, &list_count, optarg);
 					break;
 				case 'f':
-					if ((pattern_file = realloc(pattern_file, sizeof(char *) * (num_files + 1))) == NULL)
-						err(EXIT_FAILURE, NULL);
-					if ((pattern_file[num_files++] = strdup(optarg)) == NULL)
-						err(EXIT_FAILURE, NULL);
-					break;
+					pattern_files = add_to_list(pattern_files, &file_count, optarg);
 					break;
 				case 'i':
 					opt_case_insensitive = 1;
@@ -185,39 +200,50 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if ((pattern_list = realloc(pattern_list, sizeof(char *) * (num_lists + 1))) == NULL)
-		err(EXIT_FAILURE, NULL);
-	pattern_list[num_lists] = NULL;
-
-	if ((pattern_file = realloc(pattern_file, sizeof(char *) * (num_files + 1))) == NULL)
-		err(EXIT_FAILURE, NULL);
-	pattern_file[num_files] = NULL;
+	/* terminate the pattern_list and pattern_file lists from 
+	 * usage form 1 and 2 */
+	pattern_lists = add_to_list(pattern_lists, &list_count, NULL);
+	pattern_files = add_to_list(pattern_files, &file_count, NULL);
 
 	if (opt_ere + opt_strings > 1)
 		show_usage();
 
-	if (num_files + num_lists == 0) {
-		if (optind >= argc)
+	/* check for third usage form, with a single pattern_list argument */
+	if (file_count + list_count == 0) {
+		if (optind >= argc) {
 			show_usage();
-		else {
-			if ((pattern_list = realloc(pattern_list, sizeof(char *) * (num_lists + 1))) == NULL)
-				err(EXIT_FAILURE, NULL);
-			if ((pattern_list[num_lists++] = strdup(argv[optind++])) == NULL)
-				err(EXIT_FAILURE, NULL);
+		} else {
+			pattern_lists = add_to_list(pattern_lists, &list_count, argv[optind++]);
 		}
 	}
 
-	// TODO: read all pattern_file into pattern_list
+	for (int i = 0; pattern_files[i]; i++)
+	{
+		FILE *f;
+		if ((f = fopen(pattern_files[i], "r")) == NULL)
+			err(EXIT_FAILURE, "%s", pattern_files[i]);
 
-	int rc = 0;
+		// TODO: read all pattern_files into pattern_lists
+		
+		fclose(f);
+	}
 
+	/* default to no lines selected */
+	int rc = 1;
+
+	/* interate over filenames, or use stdin if none provided */
 	if (argc - optind > 0) {
+		rc = 0;
 		total_files = (argc - optind);
-		for (int i = optind; i < argc; i++) {
-			rc += do_grep(pattern_list, argv[i]);
+
+		for (int i = optind; i < argc; i++) 
+		{
+			/* if we have an error (>1) don't hide it with no lines (1)
+			 * or lines (0) */
+			rc = max(rc, do_grep(pattern_lists, argv[i]));
 		}
 	} else {
-		rc += do_grep(pattern_list, NULL);
+		rc = do_grep(pattern_lists, NULL);
 	}
 
 	exit(rc);

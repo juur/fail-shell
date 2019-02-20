@@ -75,7 +75,7 @@ static char *file_mode(mode_t mode)
 #define TIME_OLD	"%b %e  %Y"
 #define SIX_MONTHS (60*60*24*(365/2))
 
-static int print_single_entry(char *name, struct stat *sb)
+static int print_single_entry(char *name, struct stat *sb, struct stat *lsb)
 {
 	if( opt_show_file_serial )
 		printf("%lu ", sb->st_ino);
@@ -109,7 +109,7 @@ static int print_single_entry(char *name, struct stat *sb)
 
 		char append = 0;
 		if( opt_append_slash ) {
-			if( (sb->st_mode & S_IFLNK) == S_IFLNK ) append = '@';
+			if( (lsb->st_mode & S_IFLNK) == S_IFLNK ) append = '@';
 			else if( S_ISDIR(sb->st_mode) ) append = '/';
 			else if( sb->st_mode & (S_IXUSR|S_IXGRP|S_IXOTH) ) append = '*';
 			else if( S_ISFIFO(sb->st_mode) ) append = '|';
@@ -172,7 +172,7 @@ static int do_one_path(const char *tpath)
 		} else {
 			if (!opt_show_all && ent->d_name[0] == '.')
 				continue;
-			struct stat buf;
+			struct stat buf, lbuf;
 			int namelen = pathlen + 1 + strlen(ent->d_name) + 1;
 			char *name = calloc(1, namelen);
 			if (name == NULL) {
@@ -183,8 +183,11 @@ static int do_one_path(const char *tpath)
 				if (stat(name, &buf) == -1) {
 					warn("%s", name);
 					failure = 1;
+				} else if (lstat(name, &lbuf) == -1) {
+					warn("%s", name);
+					failure = 1;
 				} else {
-					if( print_single_entry(name, &buf) )
+					if( print_single_entry(name, &buf, &lbuf) )
 						failure = 1;
 					if (opt_recurse && S_ISDIR(buf.st_mode)) {
 						do_one_path(name);

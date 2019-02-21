@@ -15,6 +15,8 @@
 
 #define BUF_SIZE	0x4000
 
+static int invoke_shell(char *);
+
 /* check if a NULL terminated string is a valid sequence of digits */
 static int isnumber(const char *str)
 {
@@ -192,13 +194,46 @@ static int process_args(const char *buf, int *argc, char ***argv)
 			} else if (!in_single_quote && !in_double_quotes && isspace(*tmp)) {
 				break;
 			} 
+			/* handle $ followed by something other than whitespace */
 			if (!in_single_quote && *tmp == '$' && *(tmp+1) && !isspace(*(tmp+1))) {
 				char next = *(tmp+1);
-				if (isalpha(next)) {
-				} else if (isdigit(next)) {
-				} else {
-					char *end = NULL;
-					char *var = NULL;
+				char *end = NULL;
+				char *var = NULL;
+				char *tmpstr = NULL;
+				int wrl;
+
+				/* $0 - $9 */
+				if (isalpha(next)) 
+				{
+					end = tmp + 2;
+					wrl = 1;
+					while (*end && isalnum(*end++)) wrl++;
+					
+					if ((tmpstr = strndup(tmp + 1, wrl)) == NULL) {
+						warn(NULL);
+						goto clean_nowarn;
+					}
+
+					if ((var = getenv(tmpstr)) != NULL)
+					{
+						wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
+						dst += wrl;
+						len += wrl;
+					}
+					free(tmpstr);
+					tmp = end-1;
+				} 
+				/* $ENV */
+				else if (isdigit(next)) 
+				{
+					wrl = snprintf(dst, BUFSIZ - (dst - buf), "ARGV[%d]", next - 0x30);
+					len += wrl;
+					dst += wrl;
+					tmp+=2;
+				}
+				/* $?... */
+				else 
+				{
 
 					switch (*(tmp+1))
 					{
@@ -211,14 +246,56 @@ static int process_args(const char *buf, int *argc, char ***argv)
 							*end = '\0';
 							if ((var = getenv(tmp+2)) != NULL)
 							{
-								int wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
+								wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
 								dst += wrl;
 								len += wrl;
 							}
 							tmp = end + 1;
 							break;
+
+						case '(':
+							{
+								int open = 1;
+								int inner_double = 0, inner_single = 0;
+								var = tmp+2;
+								while (*var)
+								{
+									if (!inner_single && *var == '\\') {
+										if (!*(var+1)) {
+											warnx("trailing escape '\\' at end");
+											goto clean_nowarn;
+										}
+										var++;
+									} else if (!inner_single && !inner_double && *var == '\'') {
+										inner_single = 1;
+									} else if (!inner_single && !inner_double && *var == '"') {
+										inner_double = 1;
+									} else if (inner_single && *var == '\'') {
+										inner_single = 0;
+									} else if (inner_double && *var == '"') {
+										inner_double = 0;
+									} else if ((inner_single && *var != '\'') || (inner_double && *var != '"')) {
+										;
+									} else {
+										if (*var=='(') open++;
+										if (*var==')') open--;
+										if (!open) break;
+									}
+									var++;
+								}
+								if (open) {
+									warnx("unterminated ) %d %d", inner_double, inner_single);
+									goto clean_nowarn;
+								}
+								*var = '\0';
+								invoke_shell(tmp+2);
+								tmp = var + 1;
+							}
+							break;
+
 						case '?':
 							break;
+
 						default:
 							*(dst++) = *tmp;
 							len++;
@@ -368,6 +445,51 @@ static void trim(char *buf)
 	while (*ptr && isspace(*ptr)) *ptr-- = '\0';
 }
 
+static int invoke_shell(char *line)
+{
+	int argc = 0;
+	char **argv = NULL;
+
+	/* skip leading and trailing white space */
+	while (*line && isspace(*line)) line++;
+	trim(line);
+
+	if (process_args(line, &argc, &argv) != EXIT_SUCCESS)
+		return EXIT_FAILURE;
+
+	if(argc == 0 || argv == NULL || argv[0] == NULL)
+		return EXIT_SUCCESS;
+
+	int rc = 0;
+
+	if(!strcmp(argv[0], "umask")) {
+		rc = cmd_umask(argc, argv);
+	} else if(!strcmp(argv[0], "cd")) {
+		rc = cmd_cd(argc, argv);
+	} else if(!strcmp(argv[0], "pwd")) {
+		rc = builtin(cmd_pwd, argc, argv);
+	} else if(!strcmp(argv[0], "basename")) {
+		rc = builtin(cmd_basename, argc, argv);
+	} else if(!strcmp(argv[0], "exit")) {
+		int val = 0;
+		if(argc == 2)
+			val = atoi(argv[1]);
+		exit(val);
+	} else {
+		rc = builtin(execute, argc, argv);
+	}
+
+	printf("\nrc=%u\n", rc);
+
+	for (int i = 0; i < argc; i++ )
+	{
+		if (argv[i])
+			free(argv[i]);
+	}
+	free(argv);
+}
+
+
 int main(int ac, char *av[])
 {
 	printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
@@ -388,46 +510,7 @@ int main(int ac, char *av[])
 			exit(EXIT_FAILURE);
 		}
 
-		int argc = 0;
-		char **argv = NULL;
-
-		/* skip leading and trailing white space */
-		while (*line && isspace(*line)) line++;
-		trim(line);
-
-		if (process_args(line, &argc, &argv) != EXIT_SUCCESS)
-			continue;
-
-		if(argc == 0 || argv == NULL || argv[0] == NULL)
-			continue;
-		
-		int rc = 0;
-
-		if(!strcmp(argv[0], "umask")) {
-			rc = cmd_umask(argc, argv);
-		} else if(!strcmp(argv[0], "cd")) {
-			rc = cmd_cd(argc, argv);
-		} else if(!strcmp(argv[0], "pwd")) {
-			rc = builtin(cmd_pwd, argc, argv);
-		} else if(!strcmp(argv[0], "basename")) {
-			rc = builtin(cmd_basename, argc, argv);
-		} else if(!strcmp(argv[0], "exit")) {
-			int val = 0;
-			if(ac == 2)
-				val = atoi(av[1]);
-			exit(val);
-		} else {
-			rc = builtin(execute, argc, argv);
-		}
-
-		printf("\nrc=%u\n", rc);
-
-		for (int i = 0; i < argc; i++ )
-		{
-			if (argv[i])
-				free(argv[i]);
-		}
-		free(argv);
+		invoke_shell(line);
 
 		fflush(stdout);
 		fflush(stderr);

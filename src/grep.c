@@ -33,7 +33,7 @@ static int opt_match_entire_line = 0;
 
 static int total_files = 1;
 
-static int do_grep(char **patterns, char *file)
+static int do_grep(char **patterns, char *file, regex_t **re_patterns)
 {
 	FILE *fp = NULL;
 	int rc = 0;
@@ -62,6 +62,11 @@ static int do_grep(char **patterns, char *file)
 		if ((line = fgets(buf, BUFSIZ, fp)) == NULL)
 			continue;
 
+		int line_len = strlen(line);
+
+		if (line[line_len-1] == '\n')
+			line[line_len-1] = '\0';
+
 		lineno++;
 		int match = 0;
 		char *pattern;
@@ -76,7 +81,9 @@ static int do_grep(char **patterns, char *file)
 				else if (!opt_match_entire_line && !opt_case_insensitive) match = (strstr(line, pattern) != NULL);
 				else if (!opt_match_entire_line && opt_case_insensitive) errx(EXIT_FAILURE, "no strcasestr");
 			} else {
-				errx(EXIT_FAILURE, "no RE or ERE");
+				int re_err;
+				re_err = regexec(re_patterns[i], line, 0, NULL, 0);
+				match = (re_err != REG_NOMATCH);
 			}
 		}
 
@@ -92,7 +99,7 @@ static int do_grep(char **patterns, char *file)
 				} else {
 					if (opt_write_lineno) 
 						printf("%d:", lineno);
-					fprintf(stdout, "%s", line);
+					fprintf(stdout, "%s\n", line);
 				}
 
 				if (feof(stdout) || ferror(stdout))
@@ -223,9 +230,37 @@ int main(int argc, char *argv[])
 		if ((f = fopen(pattern_files[i], "r")) == NULL)
 			err(EXIT_FAILURE, "%s", pattern_files[i]);
 
-		// TODO: read all pattern_files into pattern_lists
+		// TODO: read all pattern_files into pattern_lists. 
+		// increment list_count, free pattern_files
 		
 		fclose(f);
+	}
+
+	regex_t **re_patterns = NULL;
+
+	if ((re_patterns = calloc(list_count, sizeof (regex_t *))) == NULL)
+		err(EXIT_FAILURE, NULL);
+
+	regex_t *cur_re;
+	char reg_err[BUFSIZ];
+	int re_err = 0;
+
+	for (int i = 0; pattern_lists[i]; i++)
+	{
+		if ((cur_re = calloc(1, sizeof(regex_t))) == NULL)
+			err(EXIT_FAILURE, NULL);
+
+		int re_flags = 0;
+		if (opt_case_insensitive) re_flags |= REG_ICASE;
+		if (opt_ere) re_flags |= REG_EXTENDED;
+
+		if ((re_err = regcomp(cur_re, pattern_lists[i], re_flags)) != 0)
+		{
+			regerror(re_err, cur_re, reg_err, BUFSIZ);
+			errx(EXIT_FAILURE, "%s", reg_err);
+		}
+
+		re_patterns[i] = cur_re;
 	}
 
 	/* default to no lines selected */
@@ -240,10 +275,10 @@ int main(int argc, char *argv[])
 		{
 			/* if we have an error (>1) don't hide it with no lines (1)
 			 * or lines (0) */
-			rc = max(rc, do_grep(pattern_lists, argv[i]));
+			rc = max(rc, do_grep(pattern_lists, argv[i], re_patterns));
 		}
 	} else {
-		rc = do_grep(pattern_lists, NULL);
+		rc = do_grep(pattern_lists, NULL, re_patterns);
 	}
 
 	exit(rc);

@@ -147,8 +147,12 @@ static int process_args(const char *buf, int *argc, char ***argv)
 		if(isspace(*ptr)) goto next;
 		if(!isprint(*ptr)) goto next;
 
+		/* the length of this argument */
 		int len = 0;
-		const char *tmp = ptr;
+		char *tmp = (char *)ptr;
+
+		char buf[BUFSIZ];
+		char *dst = buf;
 
 		/* inner loop, extracts a single argument. handles single & double quotes
 		 * as well as backslask escapes */
@@ -158,6 +162,7 @@ static int process_args(const char *buf, int *argc, char ***argv)
 					warnx("trailing escape '\\' at end");
 					goto clean_nowarn;
 				}
+				*(dst++) = *(tmp+1);
 				memmove((void *)tmp, tmp+1, strlen(tmp));
 				len++;
 				tmp++;
@@ -187,11 +192,45 @@ static int process_args(const char *buf, int *argc, char ***argv)
 			} else if (!in_single_quote && !in_double_quotes && isspace(*tmp)) {
 				break;
 			} 
-			if (!in_single_quote) {
-				//tmp = expand_dollar(++tmp);
+			if (!in_single_quote && *tmp == '$' && *(tmp+1) && !isspace(*(tmp+1))) {
+				char next = *(tmp+1);
+				if (isalpha(next)) {
+				} else if (isdigit(next)) {
+				} else {
+					char *end = NULL;
+					char *var = NULL;
+
+					switch (*(tmp+1))
+					{
+						case '{':
+							end = strchr(tmp+2, '}');
+							if (end == NULL) {
+								warnx("unterminated ${}");
+								goto clean_nowarn;
+							}
+							*end = '\0';
+							if ((var = getenv(tmp+2)) != NULL)
+							{
+								int wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
+								dst += wrl;
+								len += wrl;
+							}
+							tmp = end + 1;
+							break;
+						case '?':
+							break;
+						default:
+							*(dst++) = *tmp;
+							len++;
+							tmp++;
+							break;
+					}
+				}
+			} else {
+				*(dst++) = *tmp;
+				len++;
+				tmp++;
 			}
-			len++;
-			tmp++;
 		}
 
 		if (in_single_quote) {
@@ -206,16 +245,19 @@ static int process_args(const char *buf, int *argc, char ***argv)
 		
 		/* if we have an argument, grow *argv and append a pointer */
 		if(len>0) {
+			*dst = '\0';
+
 			char **nav = realloc(av, sizeof(char *) * (ac+1));
 			if (nav == NULL) goto clean_fail;
 			av = nav;
 
-			av[ac] = strndup(ptr, len);
+			//av[ac] = strndup(ptr, len);
+			av[ac] = strdup(buf);
 			if (av[ac] == NULL) goto clean_fail;
 
 			ac++;
-			ptr = tmp;
 		}
+		ptr = tmp; // was before }
 next:
 		ptr++;
 		continue;

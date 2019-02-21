@@ -5,6 +5,7 @@ lib
 bin
 lib64
 *.swp
+src2
 usr
 proc
 sys

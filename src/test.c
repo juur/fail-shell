@@ -149,7 +149,7 @@ static int unaryop(const char *op, const char *arg)
 			rc = is_link(arg);
 			break;
 		case 'n':
-			rc = strlen(arg);
+			rc = !strlen(arg);
 			break;
 		case 'p':
 			rc = is_fifo(arg);
@@ -176,7 +176,7 @@ static int unaryop(const char *op, const char *arg)
 			rc = is_exec(arg);
 			break;
 		case 'z':
-			rc = !strlen(arg);
+			rc = strlen(arg);
 			break;
 		default:
 			errx(EXIT_FAILURE, "unknown test '%s'", op);

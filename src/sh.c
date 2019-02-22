@@ -12,10 +12,11 @@
 #include <ctype.h>
 #include <libgen.h>
 #include <sys/stat.h>
+#include <termios.h>
 
 #define BUF_SIZE	0x4000
 
-static int invoke_shell(char *);
+static int invoke_shell(char *, int);
 
 /* check if a NULL terminated string is a valid sequence of digits */
 static int isnumber(const char *str)
@@ -48,6 +49,22 @@ static inline int isnewline(const char c)
 {
 	return c == '\n';
 }
+
+static int opt_command_string = 0;
+static int opt_interactive = 0;
+static int opt_read_stdin = 0;
+
+/* enviromental ones */
+static int opt_allexport = 0;
+static int opt_notify = 0;
+static int opt_noclobber = 0;
+static int opt_errexit = 0;
+static int opt_noglob = 0;
+static int opt_monitor = 0;
+static int opt_noexec = 0;
+static int opt_nounset = 0;
+static int opt_verbose = 0;
+static int opt_xtrace = 0;
 
 /* umask builtin */
 static int cmd_umask(int argc, char *argv[])
@@ -97,7 +114,7 @@ static int cmd_umask(int argc, char *argv[])
 }
 
 /* replace the current process with another, effectively implements exec */
-static int execute(int ac, char *av[])
+static int execute(const int ac, char *av[])
 {
 	execvp(av[0], av);
 	warn(av[0]);
@@ -134,13 +151,14 @@ static int builtin(int (*func)(int, char **), int ac, char **av)
 	}
 }
 
-static int process_args(const char *buf, int *argc, char ***argv)
+static int process_args(const char *buf, int *argc, char ***argv, char **next, int rc)
 {
 	const char *ptr = buf;
 	int ac = 0;
 	char **av = NULL;
 	int in_single_quote = 0;
 	int in_double_quotes = 0;
+	*next = NULL;
 
 	/* outer loop, each interation skips unquoted spaces & unprintable characters
 	 * before processing a single argument, pushing onto *argv */
@@ -148,13 +166,15 @@ static int process_args(const char *buf, int *argc, char ***argv)
 	{
 		if(isspace(*ptr)) goto next;
 		if(!isprint(*ptr)) goto next;
+		if(*ptr == ';') goto next;
 
 		/* the length of this argument */
 		int len = 0;
 		char *tmp = (char *)ptr;
 
-		char buf[BUFSIZ];
+		char buf[BUFSIZ+1];
 		char *dst = buf;
+		memset(dst, 0, BUFSIZ+1);
 
 		/* inner loop, extracts a single argument. handles single & double quotes
 		 * as well as backslask escapes */
@@ -196,14 +216,14 @@ static int process_args(const char *buf, int *argc, char ***argv)
 			} 
 			/* handle $ followed by something other than whitespace */
 			if (!in_single_quote && *tmp == '$' && *(tmp+1) && !isspace(*(tmp+1))) {
-				char next = *(tmp+1);
+				char nextch = *(tmp+1);
 				char *end = NULL;
 				char *var = NULL;
 				char *tmpstr = NULL;
 				int wrl;
 
-				/* $0 - $9 */
-				if (isalpha(next)) 
+				/* $ENV */
+				if (isalpha(nextch)) 
 				{
 					end = tmp + 2;
 					wrl = 1;
@@ -221,12 +241,12 @@ static int process_args(const char *buf, int *argc, char ***argv)
 						len += wrl;
 					}
 					free(tmpstr);
-					tmp = end-1;
+					tmp = end;
 				} 
-				/* $ENV */
-				else if (isdigit(next)) 
+				/* $0 - $9 */
+				else if (isdigit(nextch)) 
 				{
-					wrl = snprintf(dst, BUFSIZ - (dst - buf), "ARGV[%d]", next - 0x30);
+					wrl = snprintf(dst, BUFSIZ - (dst - buf), "ARGV[%d]", nextch - 0x30);
 					len += wrl;
 					dst += wrl;
 					tmp+=2;
@@ -274,7 +294,8 @@ static int process_args(const char *buf, int *argc, char ***argv)
 										inner_single = 0;
 									} else if (inner_double && *var == '"') {
 										inner_double = 0;
-									} else if ((inner_single && *var != '\'') || (inner_double && *var != '"')) {
+									} else if ((inner_single && *var != '\'') || 
+											(inner_double && *var != '"')) {
 										;
 									} else {
 										if (*var=='(') open++;
@@ -288,12 +309,17 @@ static int process_args(const char *buf, int *argc, char ***argv)
 									goto clean_nowarn;
 								}
 								*var = '\0';
-								invoke_shell(tmp+2);
+								puts("invoke from (\n");
+								invoke_shell(tmp+2, rc);
 								tmp = var + 1;
 							}
 							break;
 
 						case '?':
+							wrl = snprintf(dst, BUFSIZ - (dst - buf), "%d", rc);
+							dst += wrl;
+							len += wrl;
+							tmp+=2;
 							break;
 
 						default:
@@ -328,11 +354,24 @@ static int process_args(const char *buf, int *argc, char ***argv)
 			if (nav == NULL) goto clean_fail;
 			av = nav;
 
+			if (!strcmp(buf, ";")) {
+				puts("solo\n");
+				*next = tmp;
+				break;
+			} 
+
 			//av[ac] = strndup(ptr, len);
 			av[ac] = strdup(buf);
 			if (av[ac] == NULL) goto clean_fail;
 
 			ac++;
+
+			if(buf[(len = (strlen(buf)-1))] == ';') 
+			{
+				*next = tmp;
+				*(av[ac-1]+len) = '\0';
+				break;
+			}
 		}
 		ptr = tmp; // was before }
 next:
@@ -445,24 +484,66 @@ static void trim(char *buf)
 	while (*ptr && isspace(*ptr)) *ptr-- = '\0';
 }
 
-static int invoke_shell(char *line)
+static int inside_if = 0;
+static int inside_then = 0;
+static int inside_else = 0;
+
+static int invoke_shell(char *line, int old_rc)
 {
 	int argc = 0;
 	char **argv = NULL;
+	char *next;
+
 
 	/* skip leading and trailing white space */
 	while (*line && isspace(*line)) line++;
 	trim(line);
 
-	if (process_args(line, &argc, &argv) != EXIT_SUCCESS)
+	//printf("invoke_shell(%s)\n", line);
+	if (process_args(line, &argc, &argv, &next, old_rc) != EXIT_SUCCESS)
 		return EXIT_FAILURE;
+	//printf(" argc=%d, rest=%s\n", argc, next);
+	
 
 	if(argc == 0 || argv == NULL || argv[0] == NULL)
 		return EXIT_SUCCESS;
 
-	int rc = 0;
+	int rc = old_rc;
 
-	if(!strcmp(argv[0], "umask")) {
+	/* line us now useless, as expansions will have happened */
+	int arglen = 0;
+	char *allargs = calloc(1,2);
+	for (int i = 1; i < argc; i++)
+	{
+		arglen += strlen(argv[i]);
+		if(!arglen) continue;
+		allargs = realloc(allargs, arglen+2);
+		strcat(allargs, argv[i]);
+		strcat(allargs, " ");
+	}
+
+	if(!strcmp(argv[0], "if")) {
+		if (inside_if && !inside_then) goto unexpected;
+		inside_if++;
+		//printf(" invoke from if\n");
+		rc = invoke_shell(allargs, old_rc);
+	} else if(!strcmp(argv[0], "then")) {
+		if (!inside_if || inside_then) goto unexpected;
+		inside_then++;
+		//printf(" invoke from then");
+		if (!rc) rc = invoke_shell(allargs, rc);
+	} else if(!strcmp(argv[0], "else")) {
+		if (!inside_if || !inside_then) goto unexpected;
+		if (inside_then) inside_then--;
+		inside_else++;
+		//printf(" invoke from else");
+		if (rc) rc = invoke_shell(allargs, rc);
+	} else if(!strcmp(argv[0], "fi")) {
+		if (!inside_if && !(inside_then || inside_else)) goto unexpected;
+		if (inside_then) inside_then--;
+		if (inside_else) inside_else--;
+		inside_if--;
+	} else if(!strcmp(argv[0], "umask")) {
 		rc = cmd_umask(argc, argv);
 	} else if(!strcmp(argv[0], "cd")) {
 		rc = cmd_cd(argc, argv);
@@ -479,40 +560,242 @@ static int invoke_shell(char *line)
 		rc = builtin(execute, argc, argv);
 	}
 
-	printf("\nrc=%u\n", rc);
-
+done:
 	for (int i = 0; i < argc; i++ )
 	{
 		if (argv[i])
 			free(argv[i]);
 	}
 	free(argv);
+
+	if (next) {
+		//fprintf(stdout, " recurse: if=%d, then=%d, else=%d, next=%s\n",
+		//		inside_if, inside_then, inside_else, next);
+		rc = invoke_shell(next, rc);
+	}
+
+	return rc;
+unexpected:
+	warnx("unexpected %s (if=%d,then=%d,else=%d)", argv[0],
+			inside_if, inside_then, inside_else);
+	inside_if = inside_then = inside_else = 0;
+	goto done;
 }
 
+static int parse_set(char mod, char opt)
+{
+	int add = mod == '+' ? 1 : 0;
+
+	switch (opt)
+	{
+		case 'a':
+			opt_allexport = add;
+			break;
+		case 'b':
+			opt_notify = add;
+			break;
+		case 'C':
+			opt_noclobber = add;
+			break;
+		case 'e':
+			opt_errexit = add;
+			break;
+		case 'f':
+			opt_noglob = add;
+			break;
+		case 'm':
+			opt_monitor = add;
+			break;
+		case 'n':
+			opt_noexec = add;
+			break;
+		case 'u':
+			opt_nounset = add;
+			break;
+		case 'v':
+			opt_verbose = add;
+			break;
+		case 'x':
+			opt_xtrace = add;
+			break;
+		default:
+			warnx("%c: unknown set option", opt);
+			return EXIT_FAILURE;
+	}
+
+	return EXIT_SUCCESS;
+}
+
+static int parse_set_option(char *opt)
+{
+	return EXIT_SUCCESS;
+}
+
+static void reset_terminal()
+{
+	struct termios tios;
+	if (tcgetattr(STDIN_FILENO, &tios) == -1)
+		err(EXIT_FAILURE, "unable to reset terminal");
+
+	tios.c_lflag |= (ICANON|ECHO);
+
+	if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
+		err(EXIT_FAILURE, "unable to reset terminal");
+}
 
 int main(int ac, char *av[])
 {
-	printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
+	char *command_string = NULL;
+	char *command_name = NULL; 
+	char *command_file = NULL;
 
-	while(1)
 	{
-		if (printf("# ") < 0)
-			exit(EXIT_FAILURE);
+		int opt;
+		while ((opt = getopt(ac, av, "abCefhimnuvxo:cs")) != -1)
+		{
+			switch (opt)
+			{
+				case 'a':
+				case 'b':
+				case 'C':
+				case 'e':
+				case 'f':
+				case 'm':
+				case 'n':
+				case 'u':
+				case 'v':
+				case 'x':
+					if (parse_set('-',opt))
+						exit(EXIT_FAILURE);
+					break;
+				case 'o':
+					if (parse_set_option(optarg))
+						exit(EXIT_FAILURE);
+					break;
 
-		fflush(stdout);
-
-		char buf[BUFSIZ];
-		char *line = fgets(buf, BUFSIZ, stdin);
-		
-		if(line == NULL) {
-			if(feof(stdin))
-				exit(EXIT_SUCCESS);
-			exit(EXIT_FAILURE);
+				case 'c':
+					opt_command_string = 1;
+					break;
+				case 'i':
+					opt_interactive = 1;
+					break;
+				case 's':
+					opt_read_stdin = 1;
+					break;
+			}
 		}
 
-		invoke_shell(line);
+		if (optind < ac && (!strcmp(av[optind], "-") || !strcmp(av[optind], "--")))
+			optind++;
 
-		fflush(stdout);
-		fflush(stderr);
+		if (optind >= ac) {
+			if (opt_command_string)
+				errx(EXIT_FAILURE, "missing command string");
+			opt_read_stdin = 1;
+			goto opt_skip;
+		}
+
+
+		if (opt_command_string)
+			command_string = av[optind++];
+
+		if (optind >= ac) goto opt_skip;
+
+		if (opt_command_string)
+			command_name = av[optind++];
+		else if (!opt_read_stdin)
+			command_file = av[optind++];
+opt_skip:	
+		;
+
+		if (!command_string && !command_name && !command_file && isatty(STDIN_FILENO))
+			opt_interactive = 1;
+	}
+
+	printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
+
+	if (opt_command_string ) {
+		int rc = EXIT_SUCCESS;
+		exit(rc);
+	}
+
+	if (!opt_read_stdin && command_string) {
+		int rc = EXIT_SUCCESS;
+		exit(rc);
+	}
+
+	if (opt_interactive && isatty(STDIN_FILENO))
+	{
+		/*
+		struct termios tios;
+		if (tcgetattr(STDIN_FILENO, &tios) == -1)
+			err(EXIT_FAILURE, NULL);
+
+		tios.c_lflag &= ~(ICANON|ECHO);
+		*/
+		atexit(reset_terminal);
+		/*
+		if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
+			err(EXIT_FAILURE, NULL);
+			*/
+	}
+
+	/* -i and/or -s */
+	char buf[BUFSIZ];
+	char *line = buf;
+	*line = '\0';
+	//int c;
+	//int newline = 1;
+	int rc = 0;
+	while(1)
+	{
+		/*
+		if (opt_interactive)
+		{
+			if (line < buf) line = buf;
+			else if (line >= buf+sizeof(buf)) line = buf + sizeof(buf) - 1;
+
+			if (newline) {*/
+				if (printf("# ") < 0)
+					exit(EXIT_FAILURE);
+
+				fflush(stdout);/*
+				newline = 0;
+			}
+
+			if ((c = fgetc(stdin)) == EOF) {
+				exit(feof(stdin) ? EXIT_SUCCESS : EXIT_FAILURE);
+			}
+
+			if (c == '\n' ) {
+				*line = '\0';
+				fputc(c, stdout);
+				rc = invoke_shell(buf, rc);
+				memset(buf, 0, strlen(buf)+1);
+				line = buf;
+				newline = 1;
+			} else {
+				*line++ = c;
+				fputc(c, stdout);
+			}
+		}
+
+		if (!opt_interactive)
+		{*/
+			line = fgets(buf, BUFSIZ, stdin);
+		
+			if(line == NULL) {
+				if(feof(stdin))
+					exit(EXIT_SUCCESS);
+				exit(EXIT_FAILURE);
+			}
+
+			rc = invoke_shell(buf, rc);
+		/*}
+
+		if (opt_interactive) {*/
+			fflush(stdout);
+			fflush(stderr);
+		//}
 	}
 }

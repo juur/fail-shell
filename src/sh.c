@@ -16,6 +16,24 @@
 
 #define BUF_SIZE	0x4000
 
+#define	MAX_TRAP	15
+#define	MAX_OPTS	10
+
+struct sh_exec_env {
+	FILE	**fds;
+	int		num_fds;
+	char	*cwd;
+	mode_t	umask;
+	void	*traps[MAX_TRAP+1];
+	int		options[MAX_OPTS+1];
+	void	*functions;
+	pid_t	**last_cmds;
+	void	*aliases;
+	char	**private_envs;
+};
+
+static struct sh_exec_env *current = NULL;
+
 static int invoke_shell(char *, int);
 
 /* check if a NULL terminated string is a valid sequence of digits */
@@ -29,12 +47,30 @@ static int isnumber(const char *str)
 	return 1;
 }
 
+/* check if a NULL/length terminated string is a valid POSIX 'Pathname' from 
+ * the portable file name character set, plus <space>
+ */
+static int ispathname(const char *str, int max_len)
+{
+	int len = 0;
+	char c;
+
+	while ((c = str[len]) && (len++ < max_len))
+	{
+		if (isalnum(c)) continue;
+		else if (c == '.' || c == '_' || c == '-' || c == '/' || c == ' ') continue;
+		else return 0;
+	}
+
+	return 1;
+}
+
 /* check if a NULL/length terminated string is a valid POSIX 'Name' */
 static int isname(const char *str, int max_len)
 {
 	if (!(*str == '_' || isalpha(*str))) return 0;
 
-	int len = 0;
+	int len = 1;
 
 	while (*++str && (len++ < max_len))
 	{
@@ -151,33 +187,104 @@ static int builtin(int (*func)(int, char **), int ac, char **av)
 	}
 }
 
-static int process_args(const char *buf, int *argc, char ***argv, char **next, int rc)
+static int is_redirect(char *str)
+{
+	while (*str && isspace(*str)) str++;
+	char *ptr = str;
+	char *tmp;
+
+	if ((ptr = strstr(str, "|>")) != NULL) 
+	{
+		if (ptr == str) return 1;
+	} 
+	else if ((ptr = strchr(str, '>')) != NULL)
+	{
+		if (ptr == str) return 1;
+		tmp = ptr-1;
+		while (tmp >= str) if (!isdigit(*tmp--)) return 0;
+		return 1;
+	} 
+	else if ((ptr = strchr(str, '<')) != NULL)
+	{
+		if (ptr == str) return 1;
+		tmp = ptr-1;
+		while (tmp >= str) if (!isdigit(*tmp--)) return 0;
+	} 
+}
+
+/**
+ * process_args
+ *
+ * splits a string into arguments (argc, argv). 
+ *
+ * expands expansions, single quote and double quotes, as well as back-tick
+ * and backslash escapes
+ *
+ * should any sh(1) terminating
+ * string be found (e.g. | or ;) will stop processing and fill next with the
+ * unprocessed buf location
+ *
+ * extracts redirect strings (unprocessed) into redirects
+ *
+ * returns the resultant return code
+ *
+ * buf - buffer to process
+ * argc - return of argument count processed
+ * argv - return of array of pointers to arguments (NULL terminated)
+ * next - return of start of unprocessed input (or NULL)
+ * rc - current value of $?
+ * redirects - return of array of pointers to redirects (NULL terminated, unprocessed)
+ */
+static int process_args(const char *buf, int *argc, char ***argv, char **next, int rc, char ***redirects)
 {
 	const char *ptr = buf;
-	int ac = 0;
-	char **av = NULL;
+	int ac = 0, rdc = 0;
+	char **av = NULL, **rd = NULL;
 	int in_single_quote = 0;
 	int in_double_quotes = 0;
 	*next = NULL;
+	int in_redirects = 0;
 
 	/* outer loop, each interation skips unquoted spaces & unprintable characters
 	 * before processing a single argument, pushing onto *argv */
 	while(*ptr != '\0')
 	{
+		/* skip <blank> and garbage */
 		if(isspace(*ptr)) goto next;
-		if(!isprint(*ptr)) goto next;
-		if(*ptr == ';') goto next;
+		else if(!isprint(*ptr)) goto next;
+		
+		/* handle controls strings with no <blank> to the right */
+		if(*ptr == ';') {
+			goto next;
+		} else if(*ptr == '|' && *(ptr+1) != '|') {
+			// setup_pipe
+			goto next;
+		} else if(*ptr == '&' && *(ptr+1) != '&') {
+			// setup_fork
+			goto next;
+		} else if(*ptr == '|' && (*ptr+1) == '|') {
+			// setup_list_or
+			ptr++;
+			goto next;
+		} else if(*ptr == '&' && (*ptr+1) == '&') {
+			// setup_list_and
+			ptr++;
+			goto next;
+		}
 
 		/* the length of this argument */
 		int len = 0;
+
+		/* used to look ahead of outer loop pointer */
 		char *tmp = (char *)ptr;
 
+		/* temporary buffer & pointer therein */
 		char buf[BUFSIZ+1];
 		char *dst = buf;
 		memset(dst, 0, BUFSIZ+1);
 
 		/* inner loop, extracts a single argument. handles single & double quotes
-		 * as well as backslask escapes */
+		 * as well as backslask escapes and shell expansions */
 		while(*tmp && isprint(*tmp)) {
 			if (!in_single_quote && *tmp == '\\') {
 				if (!*(tmp+1)) {
@@ -215,7 +322,16 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				break;
 			} 
 			/* handle $ followed by something other than whitespace */
-			if (!in_single_quote && *tmp == '$' && *(tmp+1) && !isspace(*(tmp+1))) {
+			if (!in_single_quote && (*tmp == '$' || *tmp == '`') && *(tmp+1) && !isspace(*(tmp+1))) {
+				/* refactor this into a function, so that it can be called
+				 * recursively, e.g. inside $(()) 
+				 *
+				 * buf is needed for snprintf() protection
+				 *
+				 * len += expand_dollar(&dst, buf, &tmp);
+				 *
+				 * treat -1 as 'clean_nowarn'
+				 */
 				char nextch = *(tmp+1);
 				char *end = NULL;
 				char *var = NULL;
@@ -223,7 +339,7 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				int wrl;
 
 				/* $ENV */
-				if (isalpha(nextch)) 
+				if (*tmp == '$' && isalpha(nextch)) 
 				{
 					end = tmp + 2;
 					wrl = 1;
@@ -244,7 +360,7 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 					tmp = end;
 				} 
 				/* $0 - $9 */
-				else if (isdigit(nextch)) 
+				else if (*tmp == '$' && isdigit(nextch)) 
 				{
 					wrl = snprintf(dst, BUFSIZ - (dst - buf), "ARGV[%d]", nextch - 0x30);
 					len += wrl;
@@ -252,82 +368,75 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 					tmp+=2;
 				}
 				/* $?... */
-				else 
+				else if (*tmp == '$' && nextch == '{')
 				{
-
-					switch (*(tmp+1))
+					end = strchr(tmp+2, '}');
+					if (end == NULL) {
+						warnx("unterminated ${}");
+						goto clean_nowarn;
+					}
+					*end = '\0';
+					if ((var = getenv(tmp+2)) != NULL)
 					{
-						case '{':
-							end = strchr(tmp+2, '}');
-							if (end == NULL) {
-								warnx("unterminated ${}");
+						wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
+						dst += wrl;
+						len += wrl;
+					}
+					tmp = end + 1;
+				} else if (*tmp == '$' && nextch == '(' && *(tmp+2) == '(' ) {
+					var = strstr(tmp+3, "))");
+					if (var == NULL) {
+						warnx("unterminated $(())");
+						goto clean_nowarn;
+					}
+					*var = '\0';
+					fprintf(stderr, "unprocessed arithmetic expansion: $((%s))\n", tmp+3);
+					tmp = var + 3;
+				} else if (*tmp == '`' || nextch == '(') {
+					int open = 1;
+					int inner_double = 0, inner_single = 0;
+					var = (*tmp == '`') ? tmp+1 : tmp+2;
+					while (*var)
+					{
+						if (!inner_single && *var == '\\') {
+							if (!*(var+1)) {
+								warnx("trailing escape '\\' at end");
 								goto clean_nowarn;
 							}
-							*end = '\0';
-							if ((var = getenv(tmp+2)) != NULL)
-							{
-								wrl = snprintf(dst, BUFSIZ - (dst - buf), "%s", var);
-								dst += wrl;
-								len += wrl;
-							}
-							tmp = end + 1;
+							var++;
+						} else if (!inner_single && !inner_double && *var == '\'') {
+							inner_single = 1;
+						} else if (!inner_single && !inner_double && *var == '"') {
+							inner_double = 1;
+						} else if (inner_single && *var == '\'') {
+							inner_single = 0;
+						} else if (inner_double && *var == '"') {
+							inner_double = 0;
+						} else if ((inner_single && *var != '\'') || 
+								(inner_double && *var != '"')) {
+							;
+						} else if (*tmp == '`' && *var == '`') {
+							open--;
 							break;
-
-						case '(':
-							{
-								int open = 1;
-								int inner_double = 0, inner_single = 0;
-								var = tmp+2;
-								while (*var)
-								{
-									if (!inner_single && *var == '\\') {
-										if (!*(var+1)) {
-											warnx("trailing escape '\\' at end");
-											goto clean_nowarn;
-										}
-										var++;
-									} else if (!inner_single && !inner_double && *var == '\'') {
-										inner_single = 1;
-									} else if (!inner_single && !inner_double && *var == '"') {
-										inner_double = 1;
-									} else if (inner_single && *var == '\'') {
-										inner_single = 0;
-									} else if (inner_double && *var == '"') {
-										inner_double = 0;
-									} else if ((inner_single && *var != '\'') || 
-											(inner_double && *var != '"')) {
-										;
-									} else {
-										if (*var=='(') open++;
-										if (*var==')') open--;
-										if (!open) break;
-									}
-									var++;
-								}
-								if (open) {
-									warnx("unterminated ) %d %d", inner_double, inner_single);
-									goto clean_nowarn;
-								}
-								*var = '\0';
-								puts("invoke from (\n");
-								invoke_shell(tmp+2, rc);
-								tmp = var + 1;
-							}
-							break;
-
-						case '?':
-							wrl = snprintf(dst, BUFSIZ - (dst - buf), "%d", rc);
-							dst += wrl;
-							len += wrl;
-							tmp+=2;
-							break;
-
-						default:
-							*(dst++) = *tmp;
-							len++;
-							tmp++;
-							break;
+						} else {
+							if (*var=='(') open++;
+							if (*var==')') open--;
+							if (*tmp != '`' && !open) break;
+						}
+						var++;
 					}
+					if (open || inner_double || inner_single) {
+						warnx("unterminated )");
+						goto clean_nowarn;
+					}
+					*var = '\0';
+					invoke_shell((*tmp == '`') ? tmp +1 : tmp+2, rc);
+					tmp = var + 1;
+				} else if (nextch == '?') {
+					wrl = snprintf(dst, BUFSIZ - (dst - buf), "%d", rc);
+					dst += wrl;
+					len += wrl;
+					tmp+=2;
 				}
 			} else {
 				*(dst++) = *tmp;
@@ -345,32 +454,89 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 			warnx("unterminated double quotes");
 			goto clean_nowarn;
 		}
-		
+
 		/* if we have an argument, grow *argv and append a pointer */
 		if(len>0) {
 			*dst = '\0';
+
+			/* handle <, >, >>, |> */
+			if (is_redirect(buf)) {
+				in_redirects = 1;
+
+				char **nrd = realloc(rd, sizeof(char *) * (rdc+1));
+				if (nrd == NULL) goto clean_fail;
+				rd = nrd;
+
+				if ((rd[rdc] = strdup(buf)) == NULL) goto clean_fail;
+				rdc++;
+
+				ptr = tmp;
+				goto next;
+			} else if (in_redirects) {
+				in_redirects = 0;
+			}
+
+			/* handle control strings with <blank> either side that have
+			 * been split into singular arguments */
+			if (!strcmp(buf, ";")) {
+				*next = tmp;
+				break;
+			} else if (!strcmp(buf, "|")) {
+				// setup_pipe
+				*next = tmp;
+				break;
+			} else if (!strcmp(buf, "&")) {
+				// setup_fork
+				*next = tmp;
+			} else if (!strcmp(buf, "&&")) {
+				// setup_list_and
+				*next = tmp;
+			} else if (!strcmp(buf, "||")) {
+				// setup_list_or
+				*next = tmp;
+			}
 
 			char **nav = realloc(av, sizeof(char *) * (ac+1));
 			if (nav == NULL) goto clean_fail;
 			av = nav;
 
-			if (!strcmp(buf, ";")) {
-				puts("solo\n");
-				*next = tmp;
-				break;
-			} 
-
-			//av[ac] = strndup(ptr, len);
-			av[ac] = strdup(buf);
-			if (av[ac] == NULL) goto clean_fail;
-
+			if ((av[ac] = strdup(buf)) == NULL) goto clean_fail;
 			ac++;
+			
+			len = strlen(buf) - 1;
 
-			if(buf[(len = (strlen(buf)-1))] == ';') 
+			/* handle control strings with no <blank> to the left */
+			if(buf[len] == ';') 
 			{
 				*next = tmp;
 				*(av[ac-1]+len) = '\0';
 				break;
+			} 
+			else if(buf[len] == '|' && buf[len-1] != '|')
+			{
+				// setup_pipe
+				*next = tmp;
+				*(av[ac-1]+len) = '\0';
+			} 
+			else if(buf[len] == '&' && buf[len-1] != '&')
+			{
+				// setup_fork
+				*next = tmp;
+				*(av[ac-1]+len) = '\0';
+			}
+			else if(buf[len] == '|' && buf[len-1] == '|')
+			{
+				// setup_list_or
+				*next = tmp;
+				*(av[ac-1]+len) = '\0';
+				*(av[ac-2]+len) = '\0';
+			}
+			else if(buf[len] == '&' && buf[len-1] == '&')
+			{
+				// setup_list_and
+				*next = tmp;
+				*(av[ac-1]+len) = '\0';
+				*(av[ac-2]+len) = '\0';
 			}
 		}
 		ptr = tmp; // was before }
@@ -492,15 +658,15 @@ static int invoke_shell(char *line, int old_rc)
 {
 	int argc = 0;
 	char **argv = NULL;
+	char **redirects = NULL;
 	char *next;
-
 
 	/* skip leading and trailing white space */
 	while (*line && isspace(*line)) line++;
 	trim(line);
 
 	//printf("invoke_shell(%s)\n", line);
-	if (process_args(line, &argc, &argv, &next, old_rc) != EXIT_SUCCESS)
+	if (process_args(line, &argc, &argv, &next, old_rc, &redirects) != EXIT_SUCCESS)
 		return EXIT_FAILURE;
 	//printf(" argc=%d, rest=%s\n", argc, next);
 	
@@ -522,36 +688,42 @@ static int invoke_shell(char *line, int old_rc)
 		strcat(allargs, " ");
 	}
 
-	if(!strcmp(argv[0], "if")) {
+	char *tmp;
+	if ((tmp = strchr(argv[0], '=')) != NULL && isname(argv[0], tmp - argv[0])) {
+		printf("env\n");
+		*tmp = '\0';
+		setenv(argv[0], tmp+1, 1);
+		rc = invoke_shell(allargs, old_rc);
+	} else if (!strcmp(argv[0], "if")) {
 		if (inside_if && !inside_then) goto unexpected;
 		inside_if++;
 		//printf(" invoke from if\n");
 		rc = invoke_shell(allargs, old_rc);
-	} else if(!strcmp(argv[0], "then")) {
+	} else if (!strcmp(argv[0], "then")) {
 		if (!inside_if || inside_then) goto unexpected;
 		inside_then++;
 		//printf(" invoke from then");
 		if (!rc) rc = invoke_shell(allargs, rc);
-	} else if(!strcmp(argv[0], "else")) {
+	} else if (!strcmp(argv[0], "else")) {
 		if (!inside_if || !inside_then) goto unexpected;
 		if (inside_then) inside_then--;
 		inside_else++;
 		//printf(" invoke from else");
 		if (rc) rc = invoke_shell(allargs, rc);
-	} else if(!strcmp(argv[0], "fi")) {
+	} else if (!strcmp(argv[0], "fi")) {
 		if (!inside_if && !(inside_then || inside_else)) goto unexpected;
 		if (inside_then) inside_then--;
 		if (inside_else) inside_else--;
 		inside_if--;
-	} else if(!strcmp(argv[0], "umask")) {
+	} else if (!strcmp(argv[0], "umask")) {
 		rc = cmd_umask(argc, argv);
-	} else if(!strcmp(argv[0], "cd")) {
+	} else if (!strcmp(argv[0], "cd")) {
 		rc = cmd_cd(argc, argv);
-	} else if(!strcmp(argv[0], "pwd")) {
+	} else if (!strcmp(argv[0], "pwd")) {
 		rc = builtin(cmd_pwd, argc, argv);
-	} else if(!strcmp(argv[0], "basename")) {
+	} else if (!strcmp(argv[0], "basename")) {
 		rc = builtin(cmd_basename, argc, argv);
-	} else if(!strcmp(argv[0], "exit")) {
+	} else if (!strcmp(argv[0], "exit")) {
 		int val = 0;
 		if(argc == 2)
 			val = atoi(argv[1]);

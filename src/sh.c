@@ -14,27 +14,57 @@
 #include <sys/stat.h>
 #include <termios.h>
 
+/* function prototypes */
+static int invoke_shell(char *, int);
+
+
+/* preprocessor defines */
 #define BUF_SIZE	0x4000
 
 #define	MAX_TRAP	15
 #define	MAX_OPTS	10
 
+/* types, structures & unions */
+typedef struct {
+	char	**argv;
+	int		argc;
+	int		type;
+} list_t;
+
 struct sh_exec_env {
 	FILE	**fds;
-	int		num_fds;
-	char	*cwd;
-	mode_t	umask;
-	void	*traps[MAX_TRAP+1];
-	int		options[MAX_OPTS+1];
-	void	*functions;
+	int		  num_fds;
+	char	 *cwd;
+	mode_t	  umask;
+	void	 *traps[MAX_TRAP+1];
+	int		  options[MAX_OPTS+1];
+	void	 *functions;
 	pid_t	**last_cmds;
-	void	*aliases;
+	void	 *aliases;
 	char	**private_envs;
+	list_t	**sh_list;
 };
+
+/* local variables */
+static int fork_mode = 0;
 
 static struct sh_exec_env *current = NULL;
 
-static int invoke_shell(char *, int);
+static int opt_command_string = 0;
+static int opt_interactive = 0;
+static int opt_read_stdin = 0;
+
+/* enviromental ones */
+static int opt_allexport = 0;
+static int opt_notify = 0;
+static int opt_noclobber = 0;
+static int opt_errexit = 0;
+static int opt_noglob = 0;
+static int opt_monitor = 0;
+static int opt_noexec = 0;
+static int opt_nounset = 0;
+static int opt_verbose = 0;
+static int opt_xtrace = 0;
 
 /* check if a NULL terminated string is a valid sequence of digits */
 static int isnumber(const char *str)
@@ -80,27 +110,6 @@ static int isname(const char *str, int max_len)
 	}
 	return 1;
 }
-
-static inline int isnewline(const char c)
-{
-	return c == '\n';
-}
-
-static int opt_command_string = 0;
-static int opt_interactive = 0;
-static int opt_read_stdin = 0;
-
-/* enviromental ones */
-static int opt_allexport = 0;
-static int opt_notify = 0;
-static int opt_noclobber = 0;
-static int opt_errexit = 0;
-static int opt_noglob = 0;
-static int opt_monitor = 0;
-static int opt_noexec = 0;
-static int opt_nounset = 0;
-static int opt_verbose = 0;
-static int opt_xtrace = 0;
 
 /* umask builtin */
 static int cmd_umask(int argc, char *argv[])
@@ -159,7 +168,7 @@ static int execute(const int ac, char *av[])
 
 /* execute a builtin in a seperate process. builtins that should run in the
  * shell process, should not use this */
-static int builtin(int (*func)(int, char **), int ac, char **av)
+static int builtin(int (*func)(int, char **), int ac, char **av, int async)
 {
 	int status;
 
@@ -168,6 +177,7 @@ static int builtin(int (*func)(int, char **), int ac, char **av)
 		return EXIT_FAILURE;
 	}
 
+	fork_mode = 0;
 	pid_t newpid = fork();
 
 	if(newpid == -1) {
@@ -176,14 +186,37 @@ static int builtin(int (*func)(int, char **), int ac, char **av)
 	} else if(newpid == 0) {
 		exit(func(ac,av));
 	} else {
-		if(waitpid(newpid, &status, 0) == -1) {
-			warn(av[0]);
-			return EXIT_FAILURE;
+		if(!async) {
+			if(waitpid(newpid, &status, 0) == -1) {
+				warn(av[0]);
+				return EXIT_FAILURE;
+			}
+			if(WIFEXITED(status)) {
+				return WEXITSTATUS(status);
+			} else
+				return EXIT_SUCCESS;
+		} else {
+			printf("[?] %d\n", newpid);
 		}
-		if(WIFEXITED(status)) {
-			return WEXITSTATUS(status);
-		} else
-			return EXIT_SUCCESS;
+	}
+}
+
+static void sig_chld(int sig)
+{
+	int status;
+	pid_t pid;
+	
+	while ((pid = waitpid(-1, &status, WNOHANG)) != 0)
+	{
+		if (pid == -1) {
+			if (errno != ECHILD)
+				warn("sig_chld: %d", errno);
+			return;
+		}
+		if (status)
+			printf("[%d]+ Exit %-5d %s\n", 0,status, "(tbc)");
+		else
+			printf("[%d]+ Done       %s\n", 0, "(tbc)");
 	}
 }
 
@@ -253,30 +286,43 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 		if(isspace(*ptr)) goto next;
 		else if(!isprint(*ptr)) goto next;
 		
+		/* used to look ahead of outer loop pointer */
+		char *tmp = (char *)ptr;
+
 		/* handle controls strings with no <blank> to the right */
 		if(*ptr == ';') {
-			goto next;
+			*tmp++ = '\0';
+			*next = tmp;
+			break;
 		} else if(*ptr == '|' && *(ptr+1) != '|') {
 			// setup_pipe
-			goto next;
+			*tmp++ = '\0';
+			*next = tmp;
+			break;
 		} else if(*ptr == '&' && *(ptr+1) != '&') {
 			// setup_fork
-			goto next;
+			printf("fork3\n");
+			*tmp++ = '\0';
+			*next = tmp;
+			fork_mode = 1;
+			break;
 		} else if(*ptr == '|' && (*ptr+1) == '|') {
 			// setup_list_or
-			ptr++;
-			goto next;
+			*tmp++ = '\0';
+			*tmp++ = '\0';
+			*next = tmp;
+			break;
 		} else if(*ptr == '&' && (*ptr+1) == '&') {
 			// setup_list_and
-			ptr++;
-			goto next;
+			*tmp++ = '\0';
+			*tmp++ = '\0';
+			*next = tmp;
+			break;
 		}
 
 		/* the length of this argument */
 		int len = 0;
 
-		/* used to look ahead of outer loop pointer */
-		char *tmp = (char *)ptr;
 
 		/* temporary buffer & pointer therein */
 		char buf[BUFSIZ+1];
@@ -320,9 +366,27 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				break;
 			} else if (!in_single_quote && !in_double_quotes && isspace(*tmp)) {
 				break;
-			} 
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '&' && *(tmp+1) != '&' ) {
+				*tmp++ = '\0';
+				*next = tmp;
+				fork_mode = 1;
+				printf("fork4");
+				break;
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '|' && *(tmp+1) != '|' ) {
+				*tmp++ = '\0';
+				*next = tmp;
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '&' && *(tmp+1) == '&' ) {
+				*tmp++ = '\0';
+				*tmp++ = '\0';
+				*next = tmp;
+			} else if (!in_single_quote && !in_double_quotes && *tmp == '|' && *(tmp+1) == '|' ) {
+				*tmp++ = '\0';
+				*tmp++ = '\0';
+				*next = tmp;
+			}
 			/* handle $ followed by something other than whitespace */
-			if (!in_single_quote && (*tmp == '$' || *tmp == '`') && *(tmp+1) && !isspace(*(tmp+1))) {
+			else if (!in_single_quote && (*tmp == '$' || *tmp == '`') && *(tmp+1) && !isspace(*(tmp+1))) 
+			{
 				/* refactor this into a function, so that it can be called
 				 * recursively, e.g. inside $(()) 
 				 *
@@ -476,6 +540,7 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				in_redirects = 0;
 			}
 
+#if 0
 			/* handle control strings with <blank> either side that have
 			 * been split into singular arguments */
 			if (!strcmp(buf, ";")) {
@@ -487,14 +552,20 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				break;
 			} else if (!strcmp(buf, "&")) {
 				// setup_fork
+				printf("fork1\n");
+				fork_mode = 1;
 				*next = tmp;
+				break;
 			} else if (!strcmp(buf, "&&")) {
 				// setup_list_and
 				*next = tmp;
+				break;
 			} else if (!strcmp(buf, "||")) {
 				// setup_list_or
 				*next = tmp;
+				break;
 			}
+#endif
 
 			char **nav = realloc(av, sizeof(char *) * (ac+1));
 			if (nav == NULL) goto clean_fail;
@@ -506,6 +577,7 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 			len = strlen(buf) - 1;
 
 			/* handle control strings with no <blank> to the left */
+#if 0
 			if(buf[len] == ';') 
 			{
 				*next = tmp;
@@ -517,12 +589,16 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				// setup_pipe
 				*next = tmp;
 				*(av[ac-1]+len) = '\0';
+				break;
 			} 
 			else if(buf[len] == '&' && buf[len-1] != '&')
 			{
 				// setup_fork
+				printf("fork2\n");
+				fork_mode = 1;
 				*next = tmp;
 				*(av[ac-1]+len) = '\0';
+				break;
 			}
 			else if(buf[len] == '|' && buf[len-1] == '|')
 			{
@@ -530,6 +606,7 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				*next = tmp;
 				*(av[ac-1]+len) = '\0';
 				*(av[ac-2]+len) = '\0';
+				break;
 			}
 			else if(buf[len] == '&' && buf[len-1] == '&')
 			{
@@ -537,7 +614,9 @@ static int process_args(const char *buf, int *argc, char ***argv, char **next, i
 				*next = tmp;
 				*(av[ac-1]+len) = '\0';
 				*(av[ac-2]+len) = '\0';
+				break;
 			}
+#endif
 		}
 		ptr = tmp; // was before }
 next:
@@ -720,16 +799,16 @@ static int invoke_shell(char *line, int old_rc)
 	} else if (!strcmp(argv[0], "cd")) {
 		rc = cmd_cd(argc, argv);
 	} else if (!strcmp(argv[0], "pwd")) {
-		rc = builtin(cmd_pwd, argc, argv);
+		rc = builtin(cmd_pwd, argc, argv, fork_mode);
 	} else if (!strcmp(argv[0], "basename")) {
-		rc = builtin(cmd_basename, argc, argv);
+		rc = builtin(cmd_basename, argc, argv, fork_mode);
 	} else if (!strcmp(argv[0], "exit")) {
 		int val = 0;
 		if(argc == 2)
 			val = atoi(argv[1]);
 		exit(val);
 	} else {
-		rc = builtin(execute, argc, argv);
+		rc = builtin(execute, argc, argv, fork_mode);
 	}
 
 done:
@@ -805,6 +884,7 @@ static int parse_set_option(char *opt)
 
 static void reset_terminal()
 {
+	/*
 	struct termios tios;
 	if (tcgetattr(STDIN_FILENO, &tios) == -1)
 		err(EXIT_FAILURE, "unable to reset terminal");
@@ -813,6 +893,7 @@ static void reset_terminal()
 
 	if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
 		err(EXIT_FAILURE, "unable to reset terminal");
+	*/
 }
 
 int main(int ac, char *av[])
@@ -910,6 +991,11 @@ opt_skip:
 		if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
 			err(EXIT_FAILURE, NULL);
 			*/
+	}
+
+	if (signal(SIGCHLD, sig_chld) == SIG_ERR)
+	{
+		err(EXIT_FAILURE, "signal");
 	}
 
 	/* -i and/or -s */

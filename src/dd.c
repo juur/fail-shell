@@ -91,7 +91,7 @@ static const conv_t conv_lst[] = {
 };
 
 /* parse a conversion specifier */
-static void check_conv(const char *val)
+static void check_conv(const char *restrict val)
 {
 	const conv_t *c = NULL;
 	for (int i = 0; conv_lst[i].name; i++)
@@ -122,19 +122,19 @@ static void check_conv(const char *val)
 }
 
 /* confirm NULL terminated string solely contains digits */
-static bool isnumber(const char *val)
+static bool isnumber(const char *restrict val)
 {
 	for (const char *p = val; *p; p++) if (!isdigit(*p)) return false;
 	return true;
 }
 
 /* parse a long, exit if not a number */
-static ssize_t parse_long(const char *val)
+static ssize_t parse_long(const char *restrict val)
 {
 	char *endptr = NULL;
 
 	errno = 0;
-	ssize_t ret = strtol(val, &endptr, 10);
+	const ssize_t ret = strtol(val, &endptr, 10);
 
 	if (*val == '\0' || *endptr != '\0') {
 		if (errno)
@@ -184,15 +184,24 @@ static ssize_t parse_byte(const char *val)
 	errx(EXIT_FAILURE, "%s: invalid byte specification", val);
 }
 
-static ssize_t block_read = 0,	block_write = 0;
-static ssize_t partial_read = 0,partial_write = 0;
-static ssize_t total_read = 0,	total_write = 0;
+/* statistical reporting variables */
+static ssize_t block_read	= 0,	block_write		= 0;
+static ssize_t partial_read = 0,	partial_write	= 0;
+static ssize_t total_read	= 0,	total_write		= 0;
+static ssize_t block_trunc	= 0;
+
+/* pad character for sync */
 static char pad;
 
-/* populates in_buf with up to opt_ibs bytes of data.
+/* read_block
+ * 
+ * populates in_buf with up to opt_ibs bytes of data.
  * applies conv=sync if needed using global pad
  * applies conv=swab if needed
  * applies conv=lcase,ucase if needed
+ * TODO conv=ibm,ascii,ebcdic
+ * TODO conv=block,unblock
+ *
  * returns number of bytes read
  */
 static ssize_t read_block(char *restrict in_buf)
@@ -294,7 +303,7 @@ static void perform_dd(char *restrict in_buf, char *restrict out_buf)
 	char *in_ptr = NULL;
 	bool input = true;
 
-	fprintf(stderr, "ibs = %5ld obs = %5ld\n", opt_ibs, opt_obs);
+	//fprintf(stderr, "ibs = %5ld obs = %5ld\n", opt_ibs, opt_obs);
 
 	while (running)
 	{
@@ -328,12 +337,12 @@ static void perform_dd(char *restrict in_buf, char *restrict out_buf)
 			if ((out_bytes = write_block(out_buf, c)) == -1) break;
 			out_buf_size -= out_bytes;
 			if (out_buf_size < 0) {
-				fprintf(stderr, "                                                            (sync of %ld)\n",
-						-out_buf_size);
+			//	fprintf(stderr, "                                                            (sync of %ld)\n",
+			//			-out_buf_size);
 				out_buf_size = 0;
 			}
-			fprintf(stderr, " in = %5ld out = %5ld in_buf = %5ld out_buf = %5ld input=%d (write)\n",
-					in_bytes, out_bytes, in_buf_size, out_buf_size, input);
+			//fprintf(stderr, " in = %5ld out = %5ld in_buf = %5ld out_buf = %5ld input=%d (write)\n",
+			//		in_bytes, out_bytes, in_buf_size, out_buf_size, input);
 		}
 
 		if (opt_count && (block_read + partial_read) >= opt_count) {
@@ -343,17 +352,15 @@ static void perform_dd(char *restrict in_buf, char *restrict out_buf)
 			input = (in_bytes != 0);
 			in_buf_size = in_bytes;
 			in_ptr = in_buf;
-			fprintf(stderr, " in = %5ld out = %5ld in_buf = %5ld out_buf = %5ld input=%d (read)\n",
-					in_bytes, out_bytes, in_buf_size, out_buf_size, input);
+			//fprintf(stderr, " in = %5ld out = %5ld in_buf = %5ld out_buf = %5ld input=%d (read)\n",
+			//		in_bytes, out_bytes, in_buf_size, out_buf_size, input);
 		}
 
 		if ( (in_buf_size == 0 && out_buf_size == 0) ) break;
-
 	}
 }
 
-
-int main(int argc, char *argv[])
+int main(const int argc, const char *restrict argv[])
 {
 	fh_if = STDIN_FILENO;
 	fh_of = STDOUT_FILENO;
@@ -383,8 +390,15 @@ int main(int argc, char *argv[])
 		switch (op->type)
 		{
 			case TYPE_CONV:
-				// TODO handle ,
-				check_conv(value);
+				{
+					char *restrict ptr = strtok(value, ",");
+					while(1)
+					{
+						if (!ptr) break;
+						check_conv(ptr);
+						ptr = strtok(NULL, ",");
+					}
+				}
 				break;
 			case TYPE_STR:
 				*(char **)op->value = strdup(value);
@@ -409,6 +423,9 @@ int main(int argc, char *argv[])
 		opt_obs = opt_bs;
 	}
 
+	if (opt_conv & CONV_NOERROR)
+		errx(EXIT_FAILURE, "conv=noerror is not supported");
+
 	/* check for mutual exclusion violations */
 	if (opt_ibs == 0 || opt_obs == 0)
 		errx(EXIT_FAILURE, "ibs and obs cannot be zero");
@@ -417,12 +434,12 @@ int main(int argc, char *argv[])
 		errx(EXIT_FAILURE, "cbs cannot be zero with unblock,block");
 
 	if (opt_conv & (CONV_ASCII|CONV_EBCDIC|CONV_IBM))
-		errx(EXIT_FAILURE, "EBCDIC is not supported");
+		errx(EXIT_FAILURE, "EBCDIC/IBM/ASCII conversion is not supported");
 
 	/* process if=, if provided */
 	if (opt_if) {
 		if ((fh_if = open(opt_if, O_RDONLY)) == -1)
-			err(EXIT_FAILURE, "%s", opt_if);
+			err(EXIT_FAILURE, "%s: unable to open", opt_if);
 	}
 
 	/* process of=, if provided */
@@ -431,16 +448,8 @@ int main(int argc, char *argv[])
 		if (opt_conv | ~CONV_NOTRUNC && opt_seek == 0)
 			opt |= O_TRUNC;
 
-		if ((fh_of = open(opt_of, opt)) == -1)
-			err(EXIT_FAILURE, "%s", opt_of);
-	}
-
-	if (opt_seek) {
-		// TODO
-	}
-
-	if (opt_skip) {
-		// TODO
+		if ((fh_of = open(opt_of, opt, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH)) == -1)
+			err(EXIT_FAILURE, "%s: unable to open", opt_of);
 	}
 
 	char *in_buf = NULL;
@@ -457,20 +466,44 @@ int main(int argc, char *argv[])
 	if (opt_if == NULL) opt_if = strdup("<stdin>");
 	if (opt_of == NULL) opt_if = strdup("<stdout>");
 
-	/* track total byte progress */
+	const bool if_seekable = (lseek(fh_if, 0, SEEK_CUR) != -1);
+	const bool of_seekable = (lseek(fh_of, 0, SEEK_CUR) != -1);
 
-	/* track block progress, used for reporting message on completion */
-	ssize_t block_trunc  = 0;
+	/* process skip= */
+	if (opt_skip) {
+		if (if_seekable) {
+			if (lseek(fh_if, opt_seek * opt_ibs, SEEK_CUR) == -1)
+				err(EXIT_FAILURE, NULL);
+		} else {
+			for (int i = 0; i < opt_seek; i++)
+				if (read(fh_if, in_buf, opt_ibs) == -1)
+					err(EXIT_FAILURE, NULL);
+		}
 
+	}
+
+	/* process seek= */
+	if (opt_seek) {
+		if (of_seekable) {
+			if (lseek(fh_of, opt_seek * opt_obs, SEEK_CUR) == -1)
+				err(EXIT_FAILURE, NULL);
+		} else {
+			errx(EXIT_FAILURE,
+					"%s: unable to emulate seek on unseekable file, not implemented",
+					opt_of);
+		}
+	}
+
+	/* set pad character */
 	pad = (opt_conv & (CONV_BLOCK|CONV_UNBLOCK)) ? ' ' : '\0';
 
 	perform_dd(in_buf, out_buf);
 
 	/* print summary information */
-	fprintf(stderr, "%lu+%lu records in\n", block_read, partial_read);
-	fprintf(stderr, "%lu+%lu records out\n", block_read, partial_read);
+	fprintf(stderr, "%ld+%ld records in\n", block_read, partial_read);
+	fprintf(stderr, "%ld+%ld records out\n", block_read, partial_read);
 	if (block_trunc)
-		fprintf(stderr, "%lu truncated %s\n", block_trunc, 
+		fprintf(stderr, "%ld truncated %s\n", block_trunc, 
 				(block_trunc == 1) ? "record" : "records");
 
 	free(in_buf); in_buf = NULL;

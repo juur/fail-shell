@@ -9,9 +9,9 @@ objdir := /home/build/opt
 DESTDIR			:=
 CC				:= /home/build/opt/host/bin/tcc
 CXX				:=
-CFLAGS			:= -O2 -Wpedantic -Wall -Wextra -std=c99
+CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g
 CPPFLAGS		:=
-LDFLAGS			:= -static
+LDFLAGS			:= -static -g
 CAT				:= cat
 TAR				:= tar
 PKGCONFIG		:= pkg-config

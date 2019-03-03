@@ -12,6 +12,7 @@ CXX				:=
 CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g
 CPPFLAGS		:=
 LDFLAGS			:= -static -g
+NCURSES_LD		:= -lncurses
 CAT				:= cat
 TAR				:= tar
 PKGCONFIG		:= pkg-config
@@ -48,10 +49,13 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-all: $(all_PACKAGES) $(objdir)/.d
+all: $(all_PACKAGES) $(objdir)/.d $(objdir)/vi
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
+
+$(objdir)/vi: $(objdir)/vi.o
+	$(CC) $(LDFLAGS) -lncurses $< -o $@
 
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@

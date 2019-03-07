@@ -12,7 +12,7 @@ CXX				:=
 CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g
 CPPFLAGS		:=
 LDFLAGS			:= -static -g
-NCURSES_LD		:= -lncurses
+NCURSES_LD		:= /home/build/opt/lib64/libncurses.a
 CAT				:= cat
 TAR				:= tar
 PKGCONFIG		:= pkg-config
@@ -23,6 +23,7 @@ HELP2MAN		:= help2man
 DEPS			:= 0
 PACKAGE			:= zero-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
+skip_SRCS		:= $(srcdir)/src/vi.c
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share
@@ -37,7 +38,7 @@ libdir      := $(prefix)/lib
 mandir      := $(datarootdir)/man
 localedir   := $(datarootdir)/locale
 
-all_SRCS		:= $(wildcard $(srcdir)/src/*.c)
+all_SRCS		:= $(filter-out $(skip_SRCS), $(wildcard $(srcdir)/src/*.c))
 all_HEADERS		:= $(wildcard $(srcdir)/src/*.h)
 all_PACKAGES	:= $(addprefix $(objdir)/bin/,$(notdir $(all_SRCS:.c=)))
 package_OBJS	:= $(addprefix $(objdir)/,$(notdir $(all_SRCS:.c=.o)))
@@ -49,13 +50,10 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-all: $(all_PACKAGES) $(objdir)/.d $(objdir)/vi
+all: $(all_PACKAGES) $(objdir)/.d
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
-
-$(objdir)/vi: $(objdir)/vi.o
-	$(CC) $(LDFLAGS) -lncurses $< -o $@
 
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@

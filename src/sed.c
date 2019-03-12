@@ -1,5 +1,5 @@
 #define _XOPEN_SOURCE 700
-#define NDEBUG 1
+//#define NDEBUG 1
 
 #include <regex.h>
 #include <stdio.h>
@@ -9,15 +9,20 @@
 #include <err.h>
 #include <ctype.h>
 #include <assert.h>
+#include <stdbool.h>
 
-enum addr_en { anothing, aline, alast, apreg };
+/* types and defines */
+
+enum addr_en { ANOTHING, ALINE, ALAST, APREG };
 
 typedef struct _address {
-	enum addr_en type;
+	enum addr_en	type;
+	bool			triggered;
+
 	union {
-		int line;
-		char last;
-		regex_t *preg;
+		size_t	 line;
+		char	 last;
+		regex_t	*preg;
 	} addr;
 } address_t;
 
@@ -27,23 +32,23 @@ typedef struct _address {
 #define SUB_NTH		(1 << 3)
 
 typedef struct _sub {
-	char *wfile;
-	char *replacement;
+	char	*wfile;
+	char	*replacement;
 	regex_t *preg;
-	int flags;
-	int nth;
+	int		 flags;
+	size_t	 nth;
 } sub_t;
 
 typedef struct _command command_t;
 
 typedef struct _label {
-	char *name;
-	command_t *cmd;
+	char		*name;
+	command_t	*cmd;
 } label_t;
 
 typedef struct _jump {
-	label_t *to;
-	char *unresolved;
+	label_t		*to;
+	char		*unresolved;
 } jump_t;
 
 struct _command {
@@ -64,49 +69,72 @@ struct _command {
 	} arg;
 };
 
-label_t		**labels	= NULL;
+enum script_en { SNOTHING, SSCRIPT, SSCRIPT_FILE };
 
-command_t	 error;
-command_t	 finished;
+typedef struct _script {
+	enum script_en type;
+	char *original;
+	union {
+		char *script;
+		FILE *script_file;
+	} src;
+} script_t;
 
-command_t	*root = NULL;
 
-int opt_no_output = 0;
 
-static int add_command(command_t *restrict add, command_t *restrict tail)
+/* global variables */
+
+static script_t		**scripts	= NULL;
+static label_t		**labels	= NULL;
+static command_t	  *root		= NULL;
+static FILE			**files		= NULL;
+
+static char			holdspace[BUFSIZ & 8192];
+static command_t	error;
+static command_t	finished;
+
+static int opt_no_output	= 0;
+static int current_file		= 0;
+static bool s_successful	= false;
+
+
+
+/* local (forward) function declarations */
+
+static command_t *parse_command(command_t *, const char *, char **);
+
+
+
+/* local functions defintions */
+
+inline static int min(const int a, const int b)
 {
-	//unsigned int cnt = 0;
-
-	if (add == &error || add == &finished) return 0;
-	if (tail)
-		tail->next = add;
-	//printf("adding %p[%c] to %p[%c]\n", add, add->function, tail, tail ? tail->function : ' ');
-	return 0;
-
-	/*
-
-	if (commands == NULL) {
-		if ((commands = calloc(2, sizeof(command_t *))) == NULL) {
-			warn(NULL);
-			return -1;
-		}
-	} else {
-		for(;commands[cnt];cnt++) ;
-		command_t **tmp = NULL;
-		if ((tmp = realloc(commands, sizeof(command_t *) * (2 + cnt))) == NULL) {
-			warn(NULL);
-			return -1;
-		}
-		commands = tmp;
-		commands[cnt] = NULL;
-		commands[cnt+1] = NULL;
-	}
-	commands[cnt] = c;
-	c->pos = cnt;
-	return 0;
-	*/
+	return ((a < b) ? (a) : (b));
 }
 
+/* free members of j, but not j */
+static void free_jump(jump_t *j)
+{
+	if (j->unresolved) {
+		free(j->unresolved);
+		j->unresolved = NULL;
+	}
+	/* we don't free j */
+}
+
+#ifdef NDEBUG
+/* find the (first) label that points to c */
+static label_t *label_for_cmd(const command_t *c)
+{
+	if (labels) for (size_t i = 0; labels[i]; i++)
+		if (labels[i]->cmd == c) 
+			return labels[i];
+
+	return NULL;
+}
+#endif
+
+/* create a label & add to global list */
 static label_t *add_label(const char *str)
 {
 	label_t *ret = NULL;
@@ -114,7 +142,9 @@ static label_t *add_label(const char *str)
 		warn(NULL);
 		return NULL;
 	}
-	int cnt=0;
+
+	size_t cnt = 0;
+
 	if (labels == NULL) {
 		if ((labels = calloc(2, sizeof(label_t *))) == NULL) {
 			warn(NULL);
@@ -123,12 +153,15 @@ static label_t *add_label(const char *str)
 		}
 	} else {
 		for(;labels[cnt];cnt++) ;
+
 		label_t **tmp = NULL;
+		
 		if ((tmp = realloc(labels, sizeof(label_t *) * (2 + cnt))) == NULL) {
 			warn(NULL);
 			free(ret);
 			return NULL;
 		}
+		
 		labels = tmp;
 		labels[cnt] = NULL;
 		labels[cnt+1] = NULL;
@@ -139,17 +172,11 @@ static label_t *add_label(const char *str)
 	return ret;
 }
 
-static void free_jump(jump_t *j)
-{
-	if (j->unresolved) {
-		free(j->unresolved);
-		j->unresolved = NULL;
-	}
-}
-
+/* free l and members */
 static void free_label(label_t *l)
 {
-	if (!l) return;
+	if (!l) 
+		return;
 
 	if (l->name) {
 		free(l->name);
@@ -174,7 +201,7 @@ static int parse_label(const char *ptr, char **left, jump_t *j)
 	}
 
 	if (labels) 
-		for (int i = 0; labels[i]; i++)
+		for (size_t i = 0; labels[i]; i++)
 			if (!strncmp(labels[i]->name, ptr, tmp-ptr)) {
 				j->to = labels[i];
 				return i;
@@ -186,10 +213,11 @@ static int parse_label(const char *ptr, char **left, jump_t *j)
 	return -1;
 }
 
+/* find label by string */
 static int find_label(const char *restrict str)
 {
 	if (labels)
-		for (int i = 0; labels[i]; i++)
+		for (size_t i = 0; labels[i]; i++)
 			if(!strcmp(str, labels[i]->name)) return i;
 
 	return -1;
@@ -200,6 +228,7 @@ static FILE *parse_file(const char *ptr)
 	return NULL;
 }
 
+/* parse a BRE with arbitary delimeter into a sub_t */
 static sub_t *parse_sub(const char *ptr, const command_t *restrict c, char **left)
 {
 	if (!ptr || !*ptr) {
@@ -215,7 +244,7 @@ static sub_t *parse_sub(const char *ptr, const command_t *restrict c, char **lef
 
 	char *tmp = (char *)ptr;
 	char *cur = tmp;
-	int flags = 0, nth = 0;
+	int flags = 0, nth = 1;
 	size_t idx = 0;
 	char *end = NULL, *wfile = NULL, *dup = NULL, *endptr = NULL;
 	sub_t *ret = NULL;
@@ -311,6 +340,7 @@ dowarn:
 		warnx("unable to compile regex '%s'", part[0]);
 		goto fail;
 	}
+
 	free(part[0]); part[0] = NULL;
 	ret->replacement = part[1];
 	ret->wfile = wfile;
@@ -320,6 +350,7 @@ dowarn:
 	return ret;
 }
 
+/* parse a replacement argument of the form /blah/blah/ */
 static char **parse_replace(const char *ptr, char **seek)
 {
 	char **ret = NULL;
@@ -353,80 +384,125 @@ dowarn:
 	goto fail;
 }
 
-static command_t *parse_command(command_t *prev, const char *, char **);
+static size_t command_idx = 0;
 
-static command_t *parse_block(const char *str)
+/* add command add to optional existing command tail */
+static int add_command(command_t *restrict add, command_t *restrict tail)
 {
-	char *cur = (char *)str;
-	char *next = NULL;
-	command_t *head = NULL;
-	command_t *c = NULL;
+	if (add == NULL || add == &error)
+		return -1;
 
-	//printf(" parse_block: '%s'\n", str);
+	if (add == &finished) 
+		return 0;
+
+	if (tail)
+		tail->next = add;
+
+	return 0;
+}
+
+/* parse the provided block of commands - must be \0 terminated
+ * should not contain {}
+ **/
+static command_t *parse_block(char *str, char **left)
+{
+	char *cur = str;
+	char *next = NULL;
+	command_t *head = NULL, *c = NULL;
+
+	//printf(" strt: str='%s'\n", str);
 
 	while (1)
 	{
 		c = parse_command(c, cur, &next);
+		//printf(" loop: next='%s'\n", next);
 
 		if (c == &error) return &error;
+
+		if (left)
+			*left = next;
+
 		if (c == &finished) break;
 
 		cur = next;
-		next = NULL;
 		if (head == NULL) head = c;
 	}
+
+	//printf(" end\n");
 
 	return head;
 }
 
-static command_t *parse_command_block(const char *ptr, char **left)
+static command_t *parse_command_block(char *str, char **left)
 {
-	char *end = (char *)ptr;
-	//printf("parse_command_block: '%s'\n", ptr);
-	while (*end && (*end != '}' && *(end-1) != '\\')) {
-		if (*end == '{') {
-			warnx("nested command blocks are not supported");
-			return NULL;
+	char *end = str;
+	command_t *temp = NULL, *tail = NULL, *first = NULL;
+
+	//printf("strt: str='%s'\n", str);
+
+	while (*end)
+	{
+		*left = end;
+		//printf("loop: end='%s'\n", end);
+
+		if (*end == '}') { 
+			end++;
+			goto ok;
 		}
-		end++;
+		else if (*end == '{')
+			temp = parse_command(tail, end, &end);
+		else
+			temp = parse_block(end, &end);
+		
+		if (temp == &error || temp == NULL || temp == &finished)
+			break;
+
+		if (first == NULL) {
+			first = temp;
+		} else {
+			tail->next = temp;
+			while(1) if (tail->next) tail = tail->next;	else break;
+		}
 	}
-	//printf(" terminal found @ %s\n", end);
+
+	//*left = end;
+
+	if (temp == &error) return NULL;
+
 	if (!*end) {
 		warnx("unterminated command block");
 		return NULL;
 	}
-	*left = end + 1;
-	char *tmp = strndup(ptr, end-ptr);
-	//printf("new block\n");
-	command_t *blk = parse_block(tmp);
-	free(tmp); tmp = NULL;
-	if (blk == &error) return NULL;
-	//printf("new block @ %p\n", blk);
-	return blk;
+ok:
+	*left = end;
+	//printf("done: end='%s'\n", end);
+	return first;
 }
 
-static char *parse_function(command_t *restrict cmd, const char *ptr)
+/* parse any required arguments for the function in cmd */
+static char *parse_function(command_t *restrict cmd, char *ptr)
 {
-	char *seek = (char *)ptr;
-	//printf("parse_function '%c':'%s'\n", cmd->function, ptr);
+	char *seek = ptr;
 
 	switch(cmd->function)
 	{
 		case '{':
-			// commands
+			// commands ';' does not apply
 			if((cmd->arg.block = parse_command_block(ptr, &seek)) == NULL) return NULL;
 			break;
 		case 'a':
+		case 'c':
 		case 'i':
-			// text
+			// text ';' does not apply
 			if ((cmd->arg.text = strdup(ptr)) == NULL) {
 				warnx("%c", cmd->function);
 				return NULL;
 			}
+			seek = ptr + strlen(ptr) - 1;
 			break;
 		case 'b':
 		case 't':
-			// label
+			// label ';' does not apply
 			if (parse_label(ptr, &seek, &cmd->arg.jmp) == -1) {
 				if (cmd->arg.jmp.unresolved == NULL) {
 					if (!cmd->arg.jmp.to)
@@ -453,8 +529,9 @@ static char *parse_function(command_t *restrict cmd, const char *ptr)
 			break;
 		case 'r':
 		case 'w':
-			// FILE
+			// FILE ';' does not apply
 			cmd->arg.file = parse_file(ptr);
+			seek = ptr + strlen(ptr) - 1;
 			break;
 		case 's':
 			// sub
@@ -468,22 +545,35 @@ static char *parse_function(command_t *restrict cmd, const char *ptr)
 		case '#':
 			// error 0addr should be captured
 			break;
+		case '}':
+			return seek;
 		default:
 			warnx("%c: unknown command", cmd->function);
+			return NULL;
 	}
 	return seek;
 }
 
-
+/* the main parse routine, extracts a single command and adds it to prev
+ * may invoke itself for certain types, such as : and {}
+ */
 static command_t *parse_command(command_t *prev, const char *str, char **left)
 {
 	command_t *restrict ret = NULL;
 	char *ptr = (char *)str;
 	char *tmp = NULL;
 
-	while (ptr && *ptr && (isblank(*ptr) || *ptr == ';')) ptr++;
+	// TODO ';' does not apply for {}abcirtw:#
+	while (ptr && *ptr && (isblank(*ptr) || *ptr == ';')) ptr++; 
 
 	if (!ptr || !*ptr) return &finished;
+
+	/* others */
+
+	if (*ptr == '}') {
+		*left = ptr;
+		return &finished;
+	}
 
 	/* 0addr */
 
@@ -504,6 +594,7 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 		label_t *label = add_label(lab);
 		free(lab); lab = NULL;
 		*left = end;
+		/* notice: recursion here, as we need to know the next command the label points to */
 		command_t *next = parse_command(prev, end, left);
 		label->cmd = next;
 		return next;
@@ -520,27 +611,30 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 
 	while(*ptr)
 	{
+		/* extract an [?addr] */
 		if (addr < 2) {
+			/* addr of type $ */
 			if (*ptr == '$') 
 			{
 				if (addr == 0)  {
-					ret->one.type = alast;
+					ret->one.type = ALAST;
 					if (*(ptr+1) == ',') {
 						addr++;
 					} else
 						addr = 3;
 				} else {
-					ret->two.type = alast;
+					ret->two.type = ALAST;
 					addr = 3;
 				}
 				ptr++;
 				ret->addrs++;
 			} 
+			/* address of type [0-9]+ */
 			else if (isdigit(*ptr)) 
 			{
 				tmp = ptr;
 				while (*ptr && isdigit(*ptr)) ptr++;
-				if ((tmp = strndup(str, ptr-tmp-1)) == NULL)
+				if ((tmp = strndup(str, ptr-tmp)) == NULL)
 					goto fail;
 				val = strtol(tmp, &endptr, 10);
 				if (*endptr != '\0') {
@@ -549,23 +643,23 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 				}
 				free(tmp); tmp = NULL;
 				if (addr == 0) {
-					ret->one.type = aline;
+					ret->one.type = ALINE;
 					ret->one.addr.line = val;
 					if (*ptr == ',') addr++;
 					else addr = 3;
 				} else {
-					ret->two.type = aline;
+					ret->two.type = ALINE;
 					ret->two.addr.line = val;
 					addr = 3;
 				}
 				ret->addrs++;
 			} 
-			/* BRE */
+			/* address of type BRE, with / as delimiter */
 			else if (*ptr == '/')
 			{
-				tmp = ptr++;
+				tmp = ++ptr;
 				regex_t **restrict rc = NULL;
-				val = 0;
+				val = REG_NOSUB;
 
 				while (*ptr)
 				{
@@ -587,18 +681,20 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 				if ((tmp = strndup(tmp, endptr-tmp)) == NULL)
 					goto fail;
 
+				ptr = endptr;
+
 				if (addr == 0) {
 					rc = &ret->one.addr.preg;
-					ret->one.type = apreg;
+					ret->one.type = APREG;
 					if (*(ptr+1) == ',') {
-						ptr++;
+						//ptr++;
 						addr++;
 					}
 					else 
 						addr = 3;
 				} else {
-					rc = &ret->one.addr.preg;
-					ret->two.type = apreg;
+					rc = &ret->two.addr.preg;
+					ret->two.type = APREG;
 					addr = 3;
 				}
 
@@ -621,6 +717,7 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 				addr = 3;
 			}
 		}
+		/* skip blanks, extract function character, skip blanks invoke parse_function */
 		if (addr == 3) {
 			while (*ptr && isblank(*ptr)) ptr++;
 			if (!*ptr) {
@@ -628,6 +725,7 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 			}
 			ret->function = *ptr++;
 			while (*ptr && isblank(*ptr)) ptr++;
+			ret->pos = command_idx++;
 			*left = parse_function(ret, ptr);
 			if (*left == NULL) {
 				goto fail2;
@@ -636,10 +734,13 @@ static command_t *parse_command(command_t *prev, const char *str, char **left)
 		}
 		ptr++;
 	}
+	/* ensure we tell the caller where we have reached so it may continue */
 	*left = ptr;
 
 done:
-	if(add_command(ret, prev) == -1) return NULL;
+	/* add the command */
+	if(add_command(ret, prev) == -1) 
+		return NULL;
 	return ret;
 
 fail:
@@ -656,10 +757,13 @@ fail2:
 	return &error;
 }
 
+#ifdef NDEBUG
 static void dump(const command_t *restrict c)
 {
 	if (!c) 
 		return;
+
+	printf(":%03d ", c->pos);
 
 	if (c->addrs>0)
 		printf("[0] t:%d  ", c->one.type);
@@ -720,7 +824,7 @@ static void dump(const command_t *restrict c)
 			printf("%s: %s@%p[%c]\n", 
 					c->function == 'b' ? "bra" : "beq",
 					!c->arg.jmp.to ? c->arg.jmp.unresolved : c->arg.jmp.to->name,
-					!c->arg.jmp.to ? 0 : c->arg.jmp.to->cmd,
+					!c->arg.jmp.to ? 0 : (void *)c->arg.jmp.to->cmd,
 					!c->arg.jmp.to ? ' ' : c->arg.jmp.to->cmd->function
 					);
 			break;
@@ -738,19 +842,24 @@ static void dump(const command_t *restrict c)
 				if (c->arg.sub->flags & SUB_NTH) printf("NTH[%d] ", c->arg.sub->nth);
 			}
 			break;
+		case '{':
+			printf("{   : [skip=%d]\n", c->next ? c->next->pos : 0);
+			break;
 		default:
 			printf("%c  :\n", c->function);
 	}
 	printf("\n");
 }
+#endif
 
+/* free members of a, but not a */
 static void free_addr(address_t *restrict a)
 {
 	if (!a) return;
 
 	switch(a->type)
 	{
-		case apreg:
+		case APREG:
 			if (a->addr.preg) {
 				regfree(a->addr.preg);
 				free(a->addr.preg);
@@ -763,6 +872,7 @@ static void free_addr(address_t *restrict a)
 	/* we do not free(a) */
 }
 
+/* free s and members */
 static void free_sub(sub_t *restrict s)
 {
 	if (!s) return;
@@ -786,20 +896,34 @@ static void free_sub(sub_t *restrict s)
 	free(s);
 }
 
+/* free replace and members */
 static void free_replace(char **replace)
 {
+	if (!replace) return;
+
 	if (replace[0]) { free(replace[0]); replace[0] = NULL; }
 	if (replace[1]) { free(replace[1]); replace[1] = NULL; }
+
 	free(replace);
 }
 
+/* free c and members */
 static void free_cmd(command_t *restrict c)
 {
 	if (c == NULL) return;
 	if (c->addrs>0) { free_addr(&c->one); }
 	if (c->addrs>1) { free_addr(&c->two); }
+
 	switch(c->function)
 	{
+		case 'a':
+		case 'c':
+		case 'i':
+			if (c->arg.text) {
+				free(c->arg.text);
+				c->arg.text = NULL;
+			}
+			break;
 		case 'd':
 		case 'g':
 		case 'G':
@@ -840,10 +964,145 @@ static void free_cmd(command_t *restrict c)
 	free(c);
 }
 
+/* free a block */
+static void clean_block(command_t *c)
+{
+	if (!c)
+		return;
+
+	for(command_t *tmp = c; tmp; )
+	{
+		command_t *next; 
+		if (tmp->function == '{' && tmp->arg.block)
+			next = tmp->arg.block;
+		else
+			next = tmp->next;
+		free_cmd(tmp);
+		tmp = next;
+	}
+}
+
+/* free script and members */
+static void free_script(script_t *s)
+{
+	switch (s->type)
+	{
+		case SSCRIPT:
+			if (s->src.script) {
+				free(s->src.script);
+				s->src.script = NULL;
+			}
+			break;
+		case SSCRIPT_FILE:
+			if (s->src.script_file) {
+				fclose(s->src.script_file);
+				s->src.script_file = NULL;
+			}
+			break;
+		case SNOTHING:
+			break;
+	}
+
+	if (s->original) {
+		free(s->original);
+		s->original = NULL;
+	}
+
+	free(s);
+}
+
+static void add_file(const char *restrict fn)
+{
+	FILE *restrict fh = NULL;
+
+	if (!strcmp(fn, "-")) 
+		fh = stdin;
+	else if ((fh = fopen(fn, "r")) == NULL) {
+		warn("%s", fn);
+		return;
+	}
+
+	size_t cnt = 0;
+
+	if (files == NULL) {
+		if ((files = calloc(2, sizeof(FILE *))) == NULL)
+			err(EXIT_FAILURE, "add_file");
+	} else {
+		for(;files[cnt];cnt++) ;
+		FILE **tmp = NULL;
+		if ((tmp = realloc(files, sizeof(FILE *) * (2+ cnt))) == NULL)
+			err(EXIT_FAILURE, "add_file");
+		files = tmp;
+		files[cnt] = NULL;
+		files[cnt+1] = NULL;
+	}
+
+	files[cnt] = fh;
+	return;
+}
+
+/* add script to scripts global , value is not used and can be free'd */
+static script_t *add_script(const enum script_en type, char *restrict value)
+{
+	script_t *restrict ret = NULL;
+
+	if ((ret = calloc(1, sizeof(script_t))) == NULL)
+		goto fail;
+
+	ret->type = type;
+	ret->original = strdup(value);
+
+	switch (type)
+	{
+		case SSCRIPT:
+			if ((ret->src.script = strdup(value)) == NULL)
+				goto warn;
+			break;
+		case SSCRIPT_FILE:
+			if ((ret->src.script_file = fopen(value, "r")) == NULL)
+				goto warn;
+			break;
+		case SNOTHING:
+			warnx("unknown script type");
+			goto fail;
+			break;
+	}
+
+	size_t cnt = 0;
+
+	if (scripts == NULL) {
+		if ((scripts = calloc(2, sizeof(script_t *))) == NULL)
+			goto warn;
+	} else {
+		for(;scripts[cnt];cnt++) ;
+		script_t **tmp = NULL;
+		if ((tmp = realloc(scripts, sizeof(script_t *) * (2 + cnt))) == NULL)
+			goto warn;
+
+		scripts = tmp;
+		scripts[cnt] = NULL;
+		scripts[cnt+1] = NULL;
+	}
+
+	scripts[cnt] = ret;
+	return ret;
+
+warn:
+	warn(NULL);
+fail:
+	if (ret) {
+		free_script(ret);
+		ret = NULL;
+	}
+	return NULL;
+}
+
+
+/* invoked by atexit() to clean up */
 static void cleanup()
 {
 	if (labels) {
-		for(int i = 0; labels[i]; i++) {
+		for(size_t i = 0; labels[i]; i++) {
 			free_label(labels[i]);
 			labels[i] = NULL;
 		}
@@ -851,51 +1110,41 @@ static void cleanup()
 		labels = NULL;
 	}
 	
-	command_t *tmp = root;
-	while(tmp)
-	{
-		command_t *next = tmp->next;
-		free_cmd(tmp);
-		tmp = next;
-	}
-	/*
-	if (head) {
-		command_t *tmp;
-		for(int i = 0; commands[i]; i++) {
-			free_cmd(commands[i]);
-			commands[i] = NULL;
+	if (root)
+		clean_block(root);
+
+	if (scripts) {
+		for (size_t i = 0; scripts[i]; i++) {
+			free_script(scripts[i]);
+			scripts[i] = NULL;
 		}
-		free (commands);
-		commands = NULL;
-	}*/
+		free(scripts);
+		scripts = NULL;
+	}
+
+	if (files) {
+		for (size_t i = 0; files[i]; i++) {
+			if (fileno(files[i]) > 2) {
+				fclose(files[i]);
+			}
+			files[i] = NULL;
+		}
+		free(files);
+		files = NULL;
+	}
 }
 
-static label_t *label_for_cmd(command_t *c)
-{
-	if (labels) for (int i = 0; labels[i]; i++)
-		if (labels[i]->cmd == c) 
-			return labels[i];
-
-	return NULL;
-}
-
-
+/* handle fixups for a block, such as unresolved destinations for future labels */
 static void fix_block(command_t *first)
 {
-	//printf("fix_block: starting on %p[%c]\n", first, first->function);
 	for(command_t *cur = first; cur; cur=cur->next)
 	{
-		//printf(" fix_block: %p[%c]\n", cur, cur->function);
 		if (cur->function == '{' && cur->arg.block)
 		{
-			//printf("  fix_block: checking {\n");
-			//printf("  fix_block: recurse\n");
 			fix_block(cur->arg.block);
-			//printf("  fix_block: recurse done\n");
 			for (command_t *p = cur->arg.block; p; p=p->next) {
 				if (p->next == NULL) {
 					p->next = cur->next;
-					//printf("  fix_block: setting block tail.next [%p] to %p\n", p, cur->next);
 					break;
 				}
 			}
@@ -913,73 +1162,429 @@ static void fix_block(command_t *first)
 			}
 		}
 	}
-	//printf("fix_block: finished\n");
 }
+
+static void show_usage()
+{
+	fprintf(stderr,
+			/* form 1 */
+			"Usage: sed [-n] script [file...]\n"
+			/* form 2 & 3 */
+			"       sed [-n] -e script [-e script]... [-f script_file]... [file...]\n"
+			"       sed [-n] [-e script]... -f script_file [-f script_file]... [file...]\n");
+	exit(EXIT_FAILURE);
+}
+
+static int readline(char *buffer, size_t length)
+{
+	FILE *c = files[current_file];
+	
+	if(!c)
+		return -1;
+
+	while(1)
+	{
+		if (ferror(c))
+			err(EXIT_FAILURE, NULL);
+
+		if (feof(c)) {
+			if ((c = files[++current_file]) == NULL)
+				return 0;
+			continue;
+		}
+
+		char *res = fgets(buffer, length, files[current_file]);
+		size_t len = 0;
+		if (res) {
+			len = strlen(res);
+
+			if (res[len-1] == '\n') res[len-1] = '\0';
+			return len;
+		}
+	}
+}
+
+static void parse_script(const script_t *restrict s)
+{
+	command_t *tmp = root;
+	char *script = NULL;
+
+	switch(s->type)
+	{
+		case SSCRIPT_FILE:
+			errx(EXIT_FAILURE, "SSCRIPT_FILE: unsupported");
+			break;
+		case SSCRIPT:
+			script = s->src.script;
+			break;
+		case SNOTHING:
+			errx(EXIT_FAILURE, "SNOTHING");
+			break;
+	}
+
+	while((tmp = parse_command(tmp, script, &script)) != NULL) {
+		if (tmp == &error) errx(EXIT_FAILURE, "bad script");
+		if (tmp == &finished) break;
+		if (root == NULL) root = tmp;
+	}
+}
+
+const char *addrtype(const enum addr_en t)
+{
+	switch (t)
+	{
+		case APREG:
+			return "APREG";
+		case ALINE:
+			return "ALINE";
+		case ALAST:
+			return "ALAST";
+		case ANOTHING:
+			return "ANOTHING";
+	}
+
+	return "!ERROR!";
+}
+
+static bool addr_match(const size_t line, command_t *restrict cmd, const char *buf, const bool lastline)
+{
+	switch(cmd->addrs)
+	{
+		case 0:
+			return true;
+
+		case 1:
+			if (cmd->one.type == ALAST) return lastline;
+			if (cmd->one.type == ALINE) return (line == cmd->one.addr.line);
+			if (cmd->one.type == APREG) return (regexec(cmd->one.addr.preg, buf, 0, NULL, 0) == 0);
+			break;
+
+		case 2:
+			/* we are between addr1,addr2 */
+			if (cmd->one.triggered) {
+				if (cmd->two.type == ALINE && line > cmd->two.addr.line) {
+					cmd->one.triggered = false;
+					return false;
+				} else if (cmd->two.type == APREG) {
+					return (cmd->one.triggered = (regexec(cmd->two.addr.preg, buf, 0, NULL, 0) != 0));
+				} else if (cmd->two.type == ALAST) {
+					return true;
+				}
+			/* we are before addr1 or after addr2 */
+			} else {
+				if (cmd->one.type == APREG) {
+					return (cmd->one.triggered = (regexec(cmd->one.addr.preg, buf, 0, NULL, 0) == 0));
+				} else if (cmd->one.type == ALINE && (line>=cmd->one.addr.line && line<=cmd->two.addr.line)) {
+					return (cmd->one.triggered = true);
+				}
+			}
+			/* no change of state */
+			return cmd->one.triggered;
+	}
+
+	return false;
+}
+
+static command_t *execute(const command_t *c, char *buf, const size_t len, const int line)
+{
+	char *newbuf = calloc(1, len + 1);
+
+	if (newbuf == NULL)
+		err(EXIT_FAILURE, "execute");
+
+	command_t	*ret = c->next;
+	regmatch_t	 pmatch[1 + 9];
+
+	switch(c->function)
+	{
+		/* misc */
+		case '{':
+			ret = c->arg.block;
+			break;
+		case '=':
+			printf("%d\n", line);
+			break;
+
+		/* replacement */
+		case 'y':
+			{
+				const char *ptr = NULL;
+				for(size_t pnt = 0; buf[pnt] && pnt < len; pnt++)
+				{
+					if ((ptr = strchr(c->arg.replace[0], buf[pnt])) != NULL) {
+						newbuf[pnt] = c->arg.replace[1][ptr-c->arg.replace[0]];
+					} else {
+						newbuf[pnt] = buf[pnt]; 
+					}
+				}
+			}
+			break;
+		case 's':
+			{
+				const size_t pmatch_sz = sizeof(pmatch) / sizeof(regmatch_t);
+
+				size_t matched = 0;
+				char *next = buf;
+				char *old = NULL;
+				
+				s_successful = false;
+
+				/* main s/// loop */
+				while(next && *next && regexec(c->arg.sub->preg, next, pmatch_sz, pmatch, 0) == 0) 
+				{
+					if (!old) 
+					{
+						/* copy any non-matched chars before the 1st match */
+						strncat(newbuf, next, 
+								min(len - strlen(newbuf), pmatch[0].rm_so));
+					} else {
+						/* copy any non-matched chars up to the start of the match from end of old */
+						strncat(newbuf, old, 
+								min(len - strlen(newbuf), (next + pmatch[0].rm_so) - old));
+					}
+
+					/* keep track of the nth regex matched */
+					matched++;
+
+					/* if we are not globally replacing, and this isn't the nth, skip */
+					if (!(c->arg.sub->flags & SUB_GLOBAL) && matched != c->arg.sub->nth) 
+					{
+						/* so copy the contents of the skipped match */
+						strncat(newbuf, 
+								next + pmatch[0].rm_so, 
+								min(len - strlen(newbuf), pmatch[0].rm_eo - pmatch[0].rm_so));
+						next += pmatch[0].rm_eo;
+						old = next;
+						continue;
+					}
+
+					/* mark this s// as successful, for other commands */
+					s_successful = true;
+
+					/* proceed to copy the replacement, expanding as required */
+					const char *restrict src = c->arg.sub->replacement;
+					char *dst = newbuf + strlen(newbuf);
+
+					while (*src && dst < (newbuf + len))
+					{
+						/* \\0 */
+						if (*src == '\\' && *(src+1) == '\\' && isdigit(*(src+2))) {
+							src++;
+							*dst++ = *src++;
+							*dst++ = *src++;
+						} 
+						/* \0 */
+						else if (*src == '\\' && isdigit(*(src+1)) ) 
+						{
+							const int d = *(src+1) - '0';
+							src += 2;
+
+							if (pmatch[d].rm_eo != -1 && pmatch[d].rm_so != -1)
+							{
+								const int rlen = pmatch[d].rm_eo - pmatch[d].rm_so;
+								strncat(newbuf, 
+										next + pmatch[d].rm_so, 
+										min(rlen, len - strlen(newbuf)));
+								dst += rlen;
+							}
+						} 
+						/* \& */
+						else if (*src == '\\' && *(src+1) == '&') 
+						{
+							src+=2;
+							*dst++ = '&';
+						} 
+						/* & */
+						else if (*src == '&') 
+						{
+							src++;
+							strncat(newbuf, 
+									buf, 
+									min(strlen(buf), len - strlen(newbuf)));
+							dst = newbuf + strlen(newbuf);
+						} 
+						/* anything else */
+						else 
+						{
+							*dst++ = *src++;
+						}
+					}
+					
+					/* skipped past this match to the first unchecked char */
+					next += pmatch[0].rm_eo;
+					old = next;
+				} 
+
+				if (s_successful) {
+					/* make sure to copy from the last match to the end of the string 
+					 * use next in case old hasn't been set */
+					strncat(newbuf, 
+							next, 
+							min(len, strlen(next)));
+				} else
+					strcpy(newbuf, buf);
+			}
+			break;
+
+			/* labels */
+		case 't':
+		case 'T':
+			if (c->function == 't' ? s_successful : !s_successful) {
+				s_successful = false;
+			} else
+				break;
+		case 'b':
+			if (c->arg.jmp.to)
+				ret = c->arg.jmp.to->cmd;
+			else
+				ret =NULL;
+			break;
+
+			// FIXME these need to integrate with readline 
+			/*
+			   case 'n':
+			   case 'N':
+			   */
+
+			/* holdspace/pattern space */
+		case 'x':
+			{
+				char *tmp = strdup(holdspace);
+				if (tmp == NULL) err(EXIT_FAILURE, "execute");
+				strncpy(holdspace, buf, sizeof(holdspace));
+				strncpy(buf, tmp, len);
+				free(tmp);
+				tmp = NULL;
+				strcpy(newbuf, buf);
+			}
+			break;
+		case 'h':
+			strncpy(holdspace, buf, sizeof(holdspace));
+			strcpy(newbuf, buf);
+			break;
+		case 'H':
+			strncat(holdspace, buf, sizeof(holdspace));
+			strcpy(newbuf, buf);
+			break;
+		case 'g':
+			strncpy(buf, holdspace, len);
+			strcpy(newbuf, buf);
+			break;
+		case 'G':
+			strncat(buf, holdspace, len);
+			strcpy(newbuf, buf);
+			break;
+
+		case 'd':
+		case 'D': // FIXME handle this properly
+			*newbuf = '\0';
+			break;
+
+		/* print */
+		case 'P':
+		case 'p': // FIXME handle 'embedded newline'
+			strcpy(newbuf, buf);
+			break;
+		default:
+			free(newbuf);
+			errx(EXIT_FAILURE, "%c: unsupported", c->function);
+			ret = NULL;
+			break;
+
+		case 'q': // FIXME need to signal to break the loop & print
+			ret = NULL;
+			break;
+	}
+
+	strcpy(buf, newbuf);
+	free(newbuf);
+	newbuf = NULL;
+	return ret;
+}
+
+/* global functions */
 
 int main(const int argc, char *argv[])
 {
+	/* process command line options */
+	{
+		int opt = 0;
+		size_t num_scripts		= 0;
+		size_t num_script_files = 0;
 
-	if (argc == 1) exit(EXIT_FAILURE);
+		while ((opt = getopt(argc, argv, "ne:f:")) != -1)
+		{
+			switch (opt)
+			{
+				case 'n':
+					opt_no_output = 1;
+					break;
+				case 'e':
+					add_script(SSCRIPT, optarg);
+					num_scripts++;
+					break;
+				case 'f':
+					add_script(SSCRIPT_FILE, optarg);
+					num_script_files++;
+					break;
+				default:
+					show_usage();
+			}
+		}
+		if ((num_scripts + num_script_files) == 0) {
+			/* form 1 */
+			if (optind >= argc)
+				show_usage();
+			add_script(SSCRIPT, argv[optind++]);
+		}
+
+		if (optind == argc)
+			add_file("-");
+		else
+			while (optind < argc)
+				add_file(argv[optind++]);
+	}
+	
+	memset(holdspace, 0, sizeof(holdspace));
 	atexit(cleanup);
 
-	char *cur = argv[1];
-	char *next = NULL;
-	command_t *c = NULL;
+	char buf[BUFSIZ];
+	char next[BUFSIZ];
+	size_t line = 0;
+	bool eof = false;
 
-	while (c != &finished) 
-	{
-		c = parse_command(c, cur, &next);
+	for (size_t i = 0; scripts[i]; i++)
+		parse_script(scripts[i]);
 
-		if (c == &error) exit(EXIT_FAILURE);
-		if (c == &finished) break;
-
-		if (root == NULL) root = c;
-
-		cur = next;
-		next = NULL;
-	}
-
-	/*
-	for(int i = 0; commands[i]; i++) 
-	{
-		switch (commands[i]->function)
-		{
-			case 'b':
-				if (!commands[i]->arg.jmp.to && commands[i]->arg.jmp.unresolved) {
-					const int id = find_label(commands[i]->arg.jmp.unresolved);
-					commands[i]->arg.jmp.to = labels[id];
-					free(commands[i]->arg.jmp.unresolved);
-					commands[i]->arg.jmp.unresolved = NULL;
-				}
-				break;
-		}
-	}
-	*/
-
-	/*
-	if (labels) for(int i = 0; labels[i]; i++)
-	{
-		if (labels[i]->target)
-			labels[i]->id = labels[i]->target->pos;
-	}
-	*/
-
-	
-
+	if (!root) exit(EXIT_FAILURE);
 	fix_block(root);
-	
-	const label_t *restrict l;
-	for(command_t *c = root; c;) {
-		if ((l = label_for_cmd(c)) != NULL)
-		{
-			printf(":%s\n", l->name);
+
+	if(readline(buf, sizeof(buf))) while(*buf)
+	{
+		if (!readline(next, sizeof(next))) {
+			*next = '\0';
+			eof = 1;
 		}
-		
-		dump(c);
-		if (c->function == '{' && c->arg.block)
-			c = c->arg.block;
-		else
-			c = c->next;
+
+		line++;
+		//printf("line %04lu: '%s'\n", line, buf);
+		size_t found = 0;
+		command_t *cur = root;
+		while(cur)
+		{
+			if (addr_match(line, cur, buf, eof)) 
+			{
+				cur = execute(cur, buf, sizeof(buf), line);
+				found++;
+			} else {
+				cur = cur->next;
+			}
+		}
+		if (found)
+			printf("%s\n", buf);
+		else if (!opt_no_output)
+			printf("%s\n", buf);
+		strcpy(buf, next);
 	}
 
 	exit(EXIT_SUCCESS);

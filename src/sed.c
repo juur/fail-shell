@@ -225,6 +225,7 @@ static int find_label(const char *restrict str)
 
 static FILE *parse_file(const char *ptr)
 {
+	warnx("%s: parse_file: unimplemented", ptr);
 	return NULL;
 }
 

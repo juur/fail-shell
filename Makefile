@@ -9,7 +9,7 @@ objdir := /home/build/opt
 DESTDIR			:=
 CC				:= /home/build/opt/host/bin/tcc
 CXX				:=
-CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g
+CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g -O
 CPPFLAGS		:= -I$(srcdir) -I$(objdir)
 LDFLAGS			:= -static -g
 NCURSES_LD		:= /home/build/opt/lib64/libncurses.a
@@ -26,7 +26,7 @@ HELP2MAN		:= help2man
 DEPS			:= 0
 PACKAGE			:= zero-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
-skip_SRCS		:= vi.c sh.c
+skip_SRCS		:= vi.c sh.c sh_old.c
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share

@@ -360,7 +360,7 @@ static const char *node_type(const enum node_en type)
 	return "!!UNKNOWN!!";
 }
 
-inline static const int min(const int a, const int b)
+inline static int min(const int a, const int b)
 {
 	return (a < b) ? (a) : (b);
 }
@@ -757,7 +757,7 @@ typedef struct option_map {
 	const char opt;
 } optmap_t;
 
-static optmap_t optmap[] = {
+static const optmap_t optmap[] = {
 	{"allexport",	'a'},
 	{"notify",		'b'},
 	{"noclobber",	'C'},
@@ -794,8 +794,6 @@ static int cmd_set(const int ac, char *av[])
 {
 	int opt_show_vars = (ac == 1);
 	int opt_show_options = 0;
-
-	printf("ac=%d, av=%p\n", ac, av);
 
 	{
 		int opt;

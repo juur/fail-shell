@@ -1,7 +1,7 @@
 #define _XOPEN_SOURCE 700
 #include <stdlib.h>
 
-int main(int argc, char *argv[])
+int main()
 {
 	exit(EXIT_SUCCESS);
 }

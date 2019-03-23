@@ -5,7 +5,7 @@
 #include <err.h>
 #include <stdlib.h>
 
-int main(int argc, char *argv[])
+int main(const int argc, const char *argv[])
 {
 	if (argc != 1)
 		err(EXIT_FAILURE, "Usage: tty");

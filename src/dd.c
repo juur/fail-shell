@@ -156,7 +156,7 @@ static ssize_t parse_byte(const char *val)
 	if (strchr(val, 'x')) 
 	{
 		ssize_t a, b;
-		if ((sscanf(val, "%lux%lu", &a, &b)) != 2)
+		if ((sscanf(val, "%ldx%ld", &a, &b)) != 2)
 			errx(EXIT_FAILURE, "%s: invalid byte format", val);
 		return a * b;
 	}

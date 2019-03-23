@@ -52,7 +52,7 @@ static ssize_t perform_du(const char *restrict path, const int top, dev_t dev)
 
 	/* check for dev cross-over, or lookup the dev if we're
 	 * looking at a command line path */
-	if (dev == -1 && top) dev = sb.st_dev;
+	if (dev == (dev_t)-1 && top) dev = sb.st_dev;
 	else if (opt_same_dev && sb.st_dev != dev) return 0;
 
 	const char *restrict fn = tmp ? tmp : path;

@@ -46,7 +46,7 @@ static int rmok(char *file)
 }
 
 /* deference a file. always returns a new string that should be free()'d */
-static char *deref(char *txt, int iscmdline)
+static char *deref(const char *restrict txt, const int iscmdline)
 {
 	if (opt_mode == SL_DEREF_ALL || (iscmdline && opt_mode == SL_CMDLINE_ONLY)) {
 		struct stat lsb;
@@ -65,6 +65,7 @@ static char *deref(char *txt, int iscmdline)
 			warn("readlink: %s", txt);
 			return NULL;
 		}
+		return ret;
 	} else {
 		return(strdup(txt));
 	}
@@ -264,7 +265,7 @@ skip:
 	}
 
 	/* ensure we can open the source file */
-	int src_fd = open(src, src_flags);
+	const int src_fd = open(src, src_flags);
 	if (src_fd == -1 || fstat(src_fd, &src_sb)) {
 		warn("open: %s", src);
 		goto err_free;
@@ -318,8 +319,10 @@ skip:
 	}
 
 	/* we don't want to delete a partially broken file after this point */
-	close(dst_fd);
-	dst_fd = -1;
+	if (dst_fd != -1) {
+		close(dst_fd);
+		dst_fd = -1;
+	}
 
 	if (opt_verbose)
 		printf("%s => %s\n", src, dst);

@@ -368,6 +368,9 @@ static char **parse_replace(const char *ptr, char **seek)
 	if ((ret[1] = strndup(two, three-two)) == NULL) goto dowarn;
 	
 	*seek = (char *)(three+1);
+
+	if (strlen(ret[0]) != strlen(ret[1])) goto invalid;
+
 	return ret;
 
 invalid:

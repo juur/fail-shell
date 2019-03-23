@@ -10,20 +10,23 @@ DESTDIR			:=
 CC				:= /home/build/opt/host/bin/tcc
 CXX				:=
 CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g
-CPPFLAGS		:=
+CPPFLAGS		:= -I$(srcdir) -I$(objdir)
 LDFLAGS			:= -static -g
 NCURSES_LD		:= /home/build/opt/lib64/libncurses.a
 CAT				:= cat
 TAR				:= tar
+YACC			:= byacc
+Y_FLAGS			:= -d -t
 PKGCONFIG		:= pkg-config
 INSTALL			:= install -c
 INSTALL_PROGRAM	:= $(INSTALL)
 INSTALL_DATA	:= $(INSTALL) -m 644
 HELP2MAN		:= help2man
+# tcc does not support dependencies
 DEPS			:= 0
 PACKAGE			:= zero-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
-skip_SRCS		:= $(srcdir)/src/vi.c
+skip_SRCS		:= vi.c sh.c
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share
@@ -38,10 +41,10 @@ libdir      := $(prefix)/lib
 mandir      := $(datarootdir)/man
 localedir   := $(datarootdir)/locale
 
-all_SRCS		:= $(filter-out $(skip_SRCS), $(wildcard $(srcdir)/src/*.c))
-all_HEADERS		:= $(wildcard $(srcdir)/src/*.h)
-all_PACKAGES	:= $(addprefix $(objdir)/bin/,$(notdir $(all_SRCS:.c=)))
-package_OBJS	:= $(addprefix $(objdir)/,$(notdir $(all_SRCS:.c=.o)))
+all_SRCS		:= $(filter-out $(skip_SRCS), $(notdir $(wildcard $(srcdir)/src/*.c)))
+all_HEADERS		:= $(notdir $(wildcard $(srcdir)/src/*.h))
+all_PACKAGES	:= $(addprefix $(objdir)/bin/,$(all_SRCS:.c=))
+package_OBJS	:= $(addprefix $(objdir)/,$(filter-out sh.o,$(all_SRCS:.c=.o)))
 
 ifeq ($(DEPS),1)
 CPPFLAGS += -MMD -MP
@@ -50,7 +53,7 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-all: $(all_PACKAGES) $(objdir)/.d
+all: $(all_PACKAGES) $(objdir)/.d $(objdir)/bin/sh
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
@@ -58,6 +61,13 @@ $(objdir)/.d:
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@
 
+$(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/y.tab.o
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(objdir)/sh.o:	$(objdir)/y.tab.h $(objdir)/y.tab.c
+
+$(objdir)/y.tab.h $(objdir)/y.tab.c:	$(srcdir)/src/grammar.y $(srcdir)/src/sh.h
+	$(YACC) $(Y_FLAGS) $<
 
 .PHONY: install uninstall
 
@@ -69,10 +79,10 @@ uninstall:
 .PHONY: mostly-clean clean distclean maintainer-clean
 
 mostlyclean:
-	$(RM) $(package_OBJS)
+	$(RM) $(package_OBJS) y.tab.o
 
 clean: mostlyclean
-	$(RM) $(all_PACKAGES)
+	$(RM) $(all_PACKAGES) y.tab.c y.tab.h
 
 distclean: clean
 	$(RM) config.log

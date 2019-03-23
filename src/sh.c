@@ -1,24 +1,21 @@
 #define _XOPEN_SOURCE 700
 
+#include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
-#include <stdlib.h>
-#include <err.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <unistd.h>
-#include <sys/wait.h>
+#include <stdbool.h>
 #include <ctype.h>
-#include <libgen.h>
+#include <err.h>
+#include <regex.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
-#include <termios.h>
-#include <fcntl.h>
+#include <errno.h>
+#include <libgen.h>
 
-/* function prototypes */
-static int invoke_shell(char *, int, int);
-
-
+#include "sh.h"
+#include "y.tab.h"
 
 /* preprocessor defines */
 
@@ -31,7 +28,9 @@ static int invoke_shell(char *, int, int);
 #define LIST_AND	0
 #define	LIST_OR		1
 
-
+#define QUOTE_BASE		(1<<0)
+#define QUOTE_SPECIAL	(1<<1)
+#define QUOTE_DOUBLE	(1<<2)
 
 /* types, structures & unions */
 typedef int (*builtin_t)(int, char *[]);
@@ -75,18 +74,121 @@ typedef struct sh_exec_env {
 	int		argc;
 } shenv_t;
 
+
+typedef struct {
+	const char  *str;
+	const int    tok;
+} map_t;
+
+static const map_t lookup[] = {
+    {"&&",      AND_IF},
+    {"||",      OR_IF},
+    {";;",      DSEMI},
+    {"<<-",     DLESSDASH},
+    {">|",      CLOBBER},
+    {"<<",      DLESS},
+    {">>",      DGREAT},
+    {"<&",      LESSAND},
+    {">&",      GREATAND},
+    {"<>",      LESSGREAT},
+    {"<",       '<'},
+    {">",       '>'},
+
+    {"if",      If},
+    {"then",    Then},
+    {"else",    Else},
+    {"elif",    Elif},
+    {"fi",      Fi},
+    {"do",      Do},
+    {"done",    Done},
+    {"case",    Case},
+    {"esac",    Esac},
+    {"while",   While},
+    {"until",   Until},
+    {"for",     For},
+    {"in",      In},
+
+    {"{",       Lbrace},
+    {"}",       Rbrace},
+
+    {"&",       '&'},
+    {"(",       '('},
+    {")",       ')'},
+    {";",       ';'},
+    {"|",       '|'},
+    {"\n",      NEWLINE},
+
+    {NULL,      0}
+
+    //{"!",     Bang},
+};
+
+/* forward declarations */
+
+static int cmd_umask(int, char *[]);
+static int cmd_basename(int, char *[]);
+static int cmd_cd(int, char *[]);
+static int cmd_exec(int, char *[]);
+static int cmd_umask(int, char *[]);
+static int cmd_read(int, char *[]);
+static int cmd_set(int, char *[]);
+static int cmd_pwd(int, char *[]);
+static int cmd_exit(int, char *[]);
+static bool get_next_parser_string();
+
+/* constants */
+
+static const struct builtin builtins[] = {
+
+	{"basename",	cmd_basename,	0, 1},
+	{"cd",			cmd_cd,			0, 0},
+	{"exec",		cmd_exec,		1, 0},
+	{"exit",		cmd_exit,		1, 0},
+	{"pwd",			cmd_pwd,		0, 1},
+	{"umask",		cmd_umask,		0, 0},
+	{"read",		cmd_read,		0, 0},
+	{"set",			cmd_set,		0, 1},
+
+	{NULL, NULL, 0, 0}
+};
+
+static const map_t word				= { "WORD",				WORD };
+static const map_t io_number		= { "IO_NUMBER",		IO_NUMBER };
+static const map_t assignment_word	= { "ASSIGNMENT_WORD",	ASSIGNMENT_WORD };
+static const map_t name				= { "NAME",				NAME };
+
+static const char *reg_assignment_str	= "^[a-zA-Z]([a-zA-Z0-9_]+)?=[^ \t\n]+";    // FIXME doesn't handle A="a a"
+static const char *reg_name_str			= "^[a-zA-Z]([a-zA-Z0-9_]+)?$";
+static const char *pad_str				= "";
+
 /* local variables */
-static int fork_mode = 0;
-static int pipe_mode = 0;
-static int pipe_fd[2] = {-1,-1};
+
+static regex_t reg_assignment;
+static regex_t reg_name;
+
+static const map_t *prev	= NULL;
+static char *left			= NULL;
+static int yyline			= 0;
+static int yyrow			= 0;
+
+static char *here_doc_delim		= NULL;
+static char *here_doc_word		= NULL;
+static char *here_doc_remaining = NULL;
+static char *free_me			= NULL;
+static bool here_doc			= false;
+static bool free_left			= false;
+static bool in_case				= false;
+static bool in_case_in			= false;
+static bool in_do				= false;
+static bool in_for_in			= false;
+static bool in_for				= false;
+static bool in_brace			= false;
+static bool in_func				= false;
+static int	func_brace			= 0;
+static int	in_if				= 0;
 
 static shenv_t *cur_sh_env = NULL;
-
-static int opt_command_string = 0;
-static int opt_interactive = 0;
-static int opt_read_stdin = 0;
-
-
+static char *parser_string = NULL;
 
 /* enviromental ones */
 static int opt_allexport = 0;
@@ -102,7 +204,58 @@ static int opt_xtrace = 0;
 
 
 
+/* external variables */
+
+extern YYSTYPE yylval;
+
 /* local function defintions */
+
+/* check if a NULL terminated string is a valid sequence of digits */
+inline static int isnumber(const char *str)
+{
+	while(*str)
+	{
+		if(!isdigit(*str++)) return 0;
+	}
+
+	return 1;
+}
+
+static char **push(char *** list, char * ptr)
+{
+	size_t cnt = 0;
+	//printf("push with %p[%p], %s\n", list, *list, ptr);
+
+	if (*list == NULL) {
+		*list = malloc(2 * sizeof(char *));
+		//printf("cnt is %lu\n", cnt);
+	} else {
+		for (;(*list)[cnt];cnt++) ;
+		//printf("cnt is %lu\n", cnt);
+		char **tmp = realloc(*list, (cnt + 2) * sizeof(char *));
+		if (!tmp) { 
+			warn("push");
+			return NULL;
+		}
+		*list = tmp;
+	}
+	(*list)[cnt] = ptr;
+	(*list)[cnt+1] = NULL;
+
+	return *list;
+}
+
+/*
+static void farray(char **list)
+{
+	for(size_t i = 0; list && list[i]; i++)
+	{
+		free(list[i]);
+		list[i] = NULL;
+	}
+	free(list);
+}
+*/
 
 static env_t *getshenv(shenv_t *sh, char *name)
 {
@@ -125,10 +278,10 @@ static void exportenv(env_t *env)
 	setenv(env->name, env->val, 1);
 }
 
-static env_t *setshenv(shenv_t *sh, char *name, char *value)
+static env_t *setshenv(shenv_t *restrict sh, char *restrict name, const char *restrict value)
 {
 	errno = 0;
-	int cnt;
+	int cnt = 0;
 
 	env_t *ret = getshenv(sh, name);
 
@@ -171,339 +324,57 @@ static env_t *setshenv(shenv_t *sh, char *name, char *value)
 	ret->val = strdup(value);
 
 	if (ret->exported)
-		setenv(ret->name, ret->val, 1);
+		setshenv(cur_sh_env, ret->name, ret->val);
 
 	return ret;
 }
 
-static void dump_envs(shenv_t *sh)
-{
-	env_t *e;
 
-	for (int i = 0; (e = sh->private_envs[i]); i++)
+static const char *node_type(const enum node_en type)
+{
+	switch(type)
 	{
-		printf("[%2d] %s = %s", i, e->name, e->val);
-		if (e->readonly) printf(" (ro)");
-		if (e->exported) printf(" (expt)");
-		fputc('\n', stdout);
+		case N_NONE             : return "!!N_NONE!!";
+		case N_SUBSHELL         : return "n_subshell";
+		case N_OP               : return "n_op";
+		case N_IF               : return "n_if";
+		case N_ASSIGN           : return "n_assign";
+		case N_SIMPLE           : return "n_simple";
+		case N_IOREDIRECT       : return "n_ioredirect";
+		case N_STRING           : return "n_string";
+		case N_FUNC             : return "n_func";
+		case N_CASE             : return "n_case";
+		case N_CASEITEM         : return "n_caseitem";
+		case N_WHILE            : return "n_while";
+		case N_COMPOUND_COMMAND : return "n_compound";
+		case N_FOR              : return "n_for";
+		case N_UNTIL            : return "n_until";
+		case N_PATTERN          : return "n_pattern";
 	}
+	return "!!UNKNOWN!!";
 }
 
-
-/* check if a NULL terminated string is a valid sequence of digits */
-static int isnumber(const char *str)
+inline static const int min(const int a, const int b)
 {
-	while(*str)
+	return (a < b) ? (a) : (b);
+}
+
+static const char *token(int t)
+{
+	static char tokbuf[2];
+
+	if (t < 256) {
+		snprintf(tokbuf, 2, "%c", isprint(t) ? t : '_');
+		return tokbuf;
+	}
+
+	for (int i = 0; lookup[i].str; i++)
 	{
-		if(!isdigit(*str++)) return 0;
+		if (lookup[i].tok == t) return lookup[i].str;
 	}
 
-	return 1;
+	return "!!UNKNOWN!!";
 }
-
-/* check if a NULL/length terminated string is a valid POSIX 'Pathname' from 
- * the portable file name character set, plus <space>
- */
-#if 0
-static int ispathname(const char *str, int max_len)
-{
-	int len = 0;
-	char c;
-
-	while ((c = str[len]) && (len++ < max_len))
-	{
-		if (isalnum(c)) continue;
-		else if (c == '.' || c == '_' || c == '-' || c == '/' || c == ' ') continue;
-		else return 0;
-	}
-
-	return 1;
-}
-#endif
-
-/* check if a NULL/length terminated string is a valid POSIX 'Name' */
-static int isname(const char *str, int max_len)
-{
-	if (!(*str == '_' || isalpha(*str))) return 0;
-
-	int len = 1;
-
-	while (*++str && (len++ < max_len))
-	{
-		if (isalnum(*str)) continue;
-		else if (*str == '_') continue;
-		else return 0;
-	}
-	return 1;
-}
-
-/* grow an array (char **), append the (char *) entry, and ensure the last
- * entry is NULL. increase the (int *) cnt to match useable entries */
-static int array_add(char ***array, int *cnt, char *entry)
-{
-	// TODO handle cases where there is no cnt, and solely NULL terminated
-	// TODO migrate other instances to this
-
-	char **new;
-
-	if ((new = realloc(*array, (*cnt+2) * sizeof(char *))) == NULL)
-		return -1;
-
-	*array = new;
-	new[*cnt++] = entry;
-	new[*cnt] = NULL;
-
-	return 0;
-}
-
-#if 0
-static void free_list(list_t **l)
-{
-	for (int i = 0; l[i]; i++)
-	{
-		list_t *lst = l[i];
-
-		if (lst->argv)
-		{
-			for (int j = 0; lst->argv[j]; j++)
-				free(lst->argv[j]);
-			free(lst->argv);
-			lst->argv = NULL;
-		}
-
-		lst->argc = 0;
-		lst->type = -1;
-
-		free(lst);
-		l[i] = NULL;
-	}
-
-	free(l);
-}
-
-static int add_list(list_t ***lst, char **argv, int argc, int type)
-{
-	int cnt = 0;
-
-	if (lst)
-		for (cnt = 0; *lst[cnt]; cnt++) ;
-
-	if ((*lst = realloc(*lst, (cnt+2) * sizeof(list_t *))) == NULL)
-		return -1;
-
-	list_t *new;
-	if ((new = calloc(1, sizeof(list_t))) == NULL)
-		return -1;
-
-	*lst[cnt] = new;
-	*lst[cnt+1] = NULL;
-
-	return EXIT_SUCCESS;
-}
-#endif
-
-static void free_env(env_t *e)
-{
-	if (e->freed) printf("error: double free\n");
-
-	//printf("  free_env @ %p name:%p val:%p\n", e, e->name, e->val);
-
-	if (e->name) {
-		free(e->name);
-		e->name = NULL;
-		//printf("done name\n");
-	}
-	if (e->val) {
-		free(e->val);
-		e->val = NULL;
-	}
-
-	//printf("  done\n");
-	e->freed = 1;
-	free(e);
-}
-
-static void free_ex_env(shenv_t *c)
-{
-	//printf("\nfree_ex_env @ %p [%s]\n", c, c->name);
-	if (c->parent) {
-		free_ex_env(c->parent);
-		c->parent = NULL;
-	}
-
-	if (c->private_envs) {
-		env_t *e;
-		for (int i = 0; (e = c->private_envs[i]) != NULL; i++)
-		{
-			free_env(c->private_envs[i]);
-			c->private_envs[i] = NULL;
-		}
-		free(c->private_envs);
-		c->private_envs = NULL;
-	}
-
-	if(c->argv) {
-		for (int i = 0; i < c->argc; i++)
-		{
-			if (c->argv[i]) {
-				free(c->argv[i]);
-				c->argv[i] = NULL;
-			}
-		}
-		free(c->argv);
-		c->argv = NULL;
-		c->argc = 0;
-	}
-
-	/*
-	if(c->fds) {
-		for (int i = 0; i < c->max_fd; i++) {
-			if (c->fds[i]) {
-				if(fclose(c->fds[i]) == -1)
-					warn("fclose");
-				c->fds[i] = NULL;
-			}
-		}
-		free(c->fds);
-		c->max_fd = -1;
-		c->fds = NULL;
-	}
-	*/
-
-	free(c);
-}
-
-static shenv_t *clone_env(shenv_t *cur, const char *name)
-{
-	shenv_t *ret;
-	if ((ret = calloc(1, sizeof(shenv_t))) == NULL)
-		return NULL;
-
-	/*
-	   if (cur->cwd)
-	   if ((ret->cwd = strdup(cur->cwd)) == NULL) goto free_ret;
-	   */
-	ret->umask = cur->umask;
-
-	if (cur->private_envs)
-	{
-		int env_cnt = 0;
-		while (cur->private_envs[env_cnt]) env_cnt++;
-
-		if (env_cnt) {
-			if ((ret->private_envs = calloc(1, sizeof(env_t *) * (env_cnt+1))) == NULL) goto free_ret;
-			for (int i = 0; i < env_cnt; i++)
-			{
-				if ((ret->private_envs[i] = calloc(1, sizeof(env_t))) == NULL)
-					goto free_envs;
-
-				memcpy(ret->private_envs[i], cur->private_envs[i], sizeof(env_t));
-				ret->private_envs[i]->name = strdup(cur->private_envs[i]->name);
-				ret->private_envs[i]->val = strdup(cur->private_envs[i]->val);
-
-			}
-		}
-	}
-
-	ret->argc = cur->argc;
-	if (cur->argv)
-	{
-		if ((ret->argv = calloc(1, sizeof(char *) * ret->argc)) == NULL) goto free_envs;
-		for (int i = 0; i < ret->argc; i++) {
-			if ((ret->argv[i] = strdup(cur->argv[i])) == NULL)
-				goto free_argv;
-		}
-	}
-
-
-	memcpy(ret->fds, cur->fds, sizeof(ret->fds));
-
-	/*
-	if ((ret->fds = calloc(1, sizeof(FILE *) * (cur->max_fd+1))) == NULL)
-		goto free_argv;
-
-	ret->max_fd = cur->max_fd;
-
-	if (cur->fds)
-		for (int i = 0; i < ret->max_fd; i++)
-		{
-			if (cur->fds[i]) {
-				//printf("cloning fd[%d]\n", i);
-				int mode = fcntl(i, F_GETFL);
-				char *opmode = "r";
-				if (mode & O_RDONLY) opmode = "r";
-				else if (mode & O_WRONLY) opmode = "w";
-				else if (mode & O_RDWR) opmode = "r+";
-				
-				if ((ret->fds[i] = fdopen(i, opmode)) == NULL)
-					warn("%d: unable to clone", i);
-			}
-		}
-		*/
-
-	ret->parent = cur;
-	if ((ret->name = strdup(name)) == NULL)
-		warnx(NULL);
-
-	return ret;
-
-free_argv:
-	if (ret->argv) {
-		for (int i = 0; i < ret->argc; i++)
-			if(ret->argv[i]) {
-				free(ret->argv[i]);
-				ret->argv[i] = NULL;
-			}
-		free(ret->argv);
-		ret->argv = NULL;
-	}
-free_envs:
-	if (ret->private_envs) {
-		for (int i = 0; ret->private_envs[i]; i++) {
-			free(ret->private_envs[i]);
-			ret->private_envs[i] = NULL;
-		}
-		free(ret->private_envs);
-		ret->private_envs = NULL;
-	}
-	/*	
-free_cwd:
-if (ret->cwd)
-free(ret->cwd);
-*/
-free_ret:
-	free(ret);
-	ret = NULL;
-	return ret;
-}
-
-/*
-static int add_fds(struct shenv_t *e, int fd, FILE *f)
-{
-	if (fd >= MAX_FDS) {
-		errno = EBADF;
-		return -1;
-	}
-
-	if (fd >= e->max_fd) {
-		FILE **tmp;
-		if ((tmp = realloc(e->fds, (fd+2) * sizeof(FILE *))) == NULL)
-			return -1;
-		e->fds = tmp;
-		//printf("e->fds: %p. fd=%d ", e->fds, fd);
-		//void *from = &e->fds[e->max_fd];
-		//int len = (sizeof(FILE *) * ((fd+1) - e->max_fd));
-		//printf("from = %p len = %d\n", from, len);
-		memset(&e->fds[e->max_fd], 0, sizeof(FILE *) * ((fd+1) - e->max_fd));
-		e->max_fd = fd + 1;
-	}
-
-	e->fds[fd] = f;
-	//printf("adding e->fds[%d]=%p max_fd=%d\n", fd, e->fds[fd], e->max_fd);
-	// close existing ones?
-	return EXIT_SUCCESS;
-}
-*/
 
 /* umask builtin */
 static int cmd_umask(int argc, char *argv[])
@@ -831,17 +702,6 @@ static int cmd_exec(const int ac, char *av[])
 	return EXIT_FAILURE;
 }
 
-static int cmd_external(const int ac, char *av[])
-{
-	//	for (int i = 0; i <= 2; i++) {
-	//		int cur = fcntl(1, F_GETFD);
-	//		fcntl(1, F_SETFD, cur|FD_CLOEXEC);
-	//	}
-	execvp(av[0], av);
-	warn(av[0]);
-	return EXIT_FAILURE;
-}
-
 static int parse_set(char mod, char opt)
 {
 	int add = mod == '+' ? 1 : 0;
@@ -911,6 +771,19 @@ static int parse_set_option(char *opt)
 	return EXIT_SUCCESS;
 }
 
+static void dump_envs(shenv_t *sh)
+{
+	env_t *e;
+
+	for (int i = 0; (e = sh->private_envs[i]); i++)
+	{
+		printf("[%2d] %s = %s", i, e->name, e->val);
+		if (e->readonly) printf(" (ro)");
+		if (e->exported) printf(" (expt)");
+		fputc('\n', stdout);
+	}
+}
+
 static int cmd_set(const int ac, char *av[])
 {
 	int opt_show_vars = (ac == 1);
@@ -961,912 +834,878 @@ static int cmd_set(const int ac, char *av[])
 	return EXIT_SUCCESS;
 }
 
-static const struct builtin builtins[] = {
 
-	{"basename",	cmd_basename,	0, 1},
-	{"cd",			cmd_cd,			0, 0},
-	{"exec",		cmd_exec,		1, 0},
-	{"exit",		cmd_exit,		1, 0},
-	{"pwd",			cmd_pwd,		0, 1},
-	{"umask",		cmd_umask,		0, 0},
-	{"read",		cmd_read,		0, 0},
-	{"set",			cmd_set,		0, 1},
 
-	{NULL, NULL, 0, 0}
-};
-
-/* execute a builtin in a seperate process. builtins that should run in the
- * shell process, should not use this */
-static int builtin(builtin_t func, const int ac, char *av[], const int async)
+void print_node(const node *n, int pad, int print_next)
 {
-	int status;
-
-	if(ac == 0 || av == NULL) {
-		warn("builtin: no args");
-		return EXIT_FAILURE;
+	if (!pad) printf("\n");
+	printf("%*s%s:", pad, pad_str, node_type(n->type));
+	if (n->sep)
+		printf(" *SEP[%c]*:", n->sep != '\n' ? n->sep : ' ');
+	switch (n->type)
+	{
+		case N_STRING:
+		case N_ASSIGN:
+		case N_PATTERN:
+			printf(" [%s]\n", n->value);
+			break;
+		case N_COMPOUND_COMMAND:
+			printf("\n");
+			if (n->arg0) {
+				printf("%*scmd:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			break;
+		case N_IOREDIRECT:
+			printf(" [%d][%s][%s]\n", n->num, token(n->token), n->value);
+			break;
+		case N_FUNC:
+			printf(" [%s]\n", n->value);
+			if (n->arg0) {
+				print_node(n->arg0, pad+1, 1);
+			}
+			break;
+		case N_OP:
+			printf(" [%s]\n", token(n->token));
+			if (n->arg0) {
+				printf("%*sLHS:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			if (n->arg1) {
+				printf("%*sRHS:", pad+1, pad_str);
+				print_node(n->arg1, pad+1, 1);
+			}
+			break;
+		case N_CASE:
+			printf(" [%s]\n", n->value);
+			if (n->arg0) {
+				printf("%*sitems:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			break;
+		case N_CASEITEM:
+			printf(" \n");
+			if (n->arg0) {
+				printf("%*scmd:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			break;
+		case N_SIMPLE:
+			printf("\n");
+			if (n->arg0) {
+				printf("%*spre:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			if (n->arg1) {
+				printf("%*scmd:", pad+1, pad_str);
+				print_node(n->arg1, pad+1, 1);
+			}
+			if (n->arg2) {
+				printf("%*ssuf:", pad+1, pad_str);
+				print_node(n->arg2, pad+1, 1);
+			}
+			break;
+		case N_IF:
+			printf("\n");
+			if (n->arg0) {
+				printf("%*sstmt:", pad+1, pad_str);
+				print_node(n->arg0, pad+1, 1);
+			}
+			if (n->arg1) {
+				printf("%*strue:", pad+1, pad_str);
+				print_node(n->arg1, pad+1, 1);
+			}
+			if (n->arg2) {
+				printf("%*sfalse:", pad+1, pad_str);
+				print_node(n->arg2, pad+1, 1);
+			}
+			break;
+		default:
+			printf("\n");
+			break;
 	}
+	node *tmp; int cnt;
+	if(print_next)
+	for (tmp = n->next, cnt = 0; tmp; tmp = tmp->next, cnt++)
+	{
+		printf("%*s [%d]:", pad,pad_str,cnt);
+		print_node(tmp, pad+2, 0);
+	}
+}
 
-	fork_mode = 0;
-	pid_t newpid = fork();
+static char *parseenv(const char *restrict val, int *restrict rc)
+{
+	const char *ptr = val;
+	const char *start = NULL;
+	char buf[BUFSIZ];
+	char *env = NULL, *ret = NULL;
+	env_t *genv = NULL;
 
-	if(newpid == -1) {
-		warn(av[0]);
-		return EXIT_FAILURE;
-	} else if(newpid == 0) {
-		//for (int i = 0; i < NUM_FDS; i++)
-		//	close(i);
+	int opt_default = 0, opt_assign_def = 0, opt_err = 0, opt_alternate = 0;
+	int opt_colon = 0;
+	int opt_length = 0;
+	int opt_rem_l_suf = 0, opt_rem_s_suf = 0;
+	int opt_rem_l_pre = 0, opt_rem_s_pre = 0;
 
-		for (int i = 0; i < NUM_FDS; i++)
-		{
-			int fd;
-			if (cur_sh_env->fds[i] != -1 && cur_sh_env->fds[i] != i) {
-				fprintf(stderr, "dup2(%d,%d)", cur_sh_env->fds[i], i);
-				if ((fd = dup2(cur_sh_env->fds[i], i)) == -1)
-					warn("dup2");
-			}
-		}
+	if (*ptr == '#') { opt_length = 1; }
+	
+	start = ptr;
+	while (*ptr && (isalnum(*ptr) || *ptr == '_')) ptr++;
+	env = strndup(start, ptr - start);
+	
+	if(!strncmp(ptr, ":-", 2)) { opt_colon=1; opt_default=1; ptr+=2; }
+	else if(!strncmp(ptr, ":=", 2)) { opt_colon=1; opt_assign_def=1; ptr+=2; }
+	else if(!strncmp(ptr, ":?", 2)) { opt_colon=1; opt_err=1; ptr+=2; }
+	else if(!strncmp(ptr, ":+", 2)) { opt_colon=1; opt_alternate=1; ptr+=2; }
+	else if(!strncmp(ptr, "%%", 2)) { opt_rem_l_suf=1; ptr+=2; }
+	else if(!strncmp(ptr, "##", 2)) { opt_rem_l_pre=1; ptr+=2; }
+	else if(*ptr == '-') { opt_default=1; ptr++; }
+	else if(*ptr == '=') { opt_assign_def=1; ptr++; }
+	else if(*ptr == '?') { opt_err=1; ptr++; }
+	else if(*ptr == '+') { opt_alternate=1; ptr++; }
+	else if(*ptr == '%') { opt_rem_s_suf=1; ptr++; }
+	else if(*ptr == '#') { opt_rem_l_pre=1; ptr++; }
 
-		exit(func(ac,av));
-	} else {
-		if(!async) {
-			if(waitpid(newpid, &status, 0) == -1) {
-				warn(av[0]);
-				return EXIT_FAILURE;
-			}
-			if(WIFEXITED(status)) {
-				return WEXITSTATUS(status);
-			}
+	start = ptr;
+
+	genv = getshenv(cur_sh_env, env);
+	size_t genv_len = genv ? strlen(genv->val) : 0;
+
+	if (opt_length) {
+		if (!genv) goto fail;
+		snprintf(buf, BUFSIZ, "%lu", strlen(genv->val));
+		ret = strdup(buf);
+	} else if (opt_rem_l_suf + opt_rem_l_pre + opt_rem_s_pre + opt_rem_s_suf) {
+		// TODO
+	} else if (opt_alternate) {
+		/* :+ or : */
+		if (genv && genv_len) ret = strdup(start);
+		else if(genv) {
+			/* set but null */
+			if (opt_colon) ret = strdup("");
+			else ret = strdup(start);
 		} else {
-			printf("[?] %d\n", newpid);
+			/* unset */
+			ret = strdup("");
 		}
+	} else if (genv && strlen(genv->val)) {
+		/* set and not null */
+		ret = strdup(genv->val);
+	} else if (opt_default) {
+		/* :- or - */
+		if (!genv || opt_colon) ret = strdup(start);
+		else ret = strdup("");
+	} else if (opt_assign_def) {
+		/* := or = */
+		if (!genv || opt_colon) {
+			setshenv(cur_sh_env, env, start);
+			ret = strdup(start);
+		} else ret = strdup("");
+	} else if (opt_err) {
+		/* :? or ? */
+		if (!genv || opt_colon) {
+			warnx("%s: parameter null or not set", env);
+			*rc = 1;
+			goto fail;
+		} else
+			ret = strdup("");
+	} else {
+		err(EXIT_FAILURE, "reached a place we shouldn't get to");
 	}
 
-	return EXIT_SUCCESS;
+//done:
+	if (env) { free(env); env = NULL; }
+	return ret;
+fail:
+	if (env) { free(env); env = NULL; }
+	return NULL;
 }
 
-static void sig_chld(int sig)
+char *expand(const char *restrict str, int *rc)
 {
-	int status;
-	pid_t pid;
+	char buf[BUFSIZ] = {0};
+	char var[BUFSIZ] = {0};
+	const char *src = str;
+	char *dst = buf, *tmp = NULL, *val = NULL;
+	bool in_double_quotes = false;
+	size_t len = 0;
+	env_t *env = NULL;
 
-	while ((pid = waitpid(-1, &status, WNOHANG)) != 0)
+	//printf("expand: %s\n", str);
+
+	if (!src) return NULL;
+
+	while (*src)
 	{
-		if (pid == -1) {
-			if (errno != ECHILD)
-				warn("sig_chld: %d", errno);
-			return;
-		}
-		if (status)
-			printf("[%d]+ Exit %-5d %s\n", 0,status, "(tbc)");
-		else
-			printf("[%d]+ Done       %s\n", 0, "(tbc)");
+		char next = *(src+1);
+
+		if (*src == '$') {
+			if (next == '(' && *(src+2) == '(') {
+				src+=3;
+			} else if (next == '(') {
+				src+=2;
+			} else if (next == '{') {
+				src+=2; tmp = var;
+				while(*src && *src != '}') *tmp++ = *src++;
+				*tmp = '\0';
+				val = parseenv(var, rc);
+				if (val && *val) {
+					dst += (len = min(BUFSIZ - strlen(buf), strlen(val)));
+					strncat(buf, val, len);
+					free(val); val = NULL;
+				}
+				src++;
+				continue;
+			} else if (isalpha(next)) {
+				src++; tmp = var;
+				while(*src && !isblank(*src)) *tmp++ = *src++;
+				*tmp = '\0';
+				env = getshenv(cur_sh_env, var);
+				if (env && *(env->val)) {
+					dst += (len = min(BUFSIZ - strlen(buf), strlen(env->val)));
+					strncat(buf, env->val, len);
+				}
+				continue;
+			} else if (isdigit(next)) {
+				src+=2;
+			} else if (next == '?') {
+				dst += snprintf(buf, BUFSIZ, "%u", *rc);
+				src+=2;
+			} else if (next == '*') {
+				src+=2;
+			} else if (next == '@') {
+				src+=2;
+			} else if (next == '-') {
+				src+=2;
+			} else if (next == '$') {
+				dst += snprintf(buf, BUFSIZ, "%u", getpid());
+				src+=2;
+			} else if (next == '!') {
+				src+=2;
+			} else if (next == '#') {
+				src+=2;
+			}
+		} else if(*src == '"') {
+			in_double_quotes = !in_double_quotes;
+			src++; 
+			continue;
+		} else if(!in_double_quotes && *src == '\'') {
+			src++;
+			while (*src && *src != '\'') *dst++ = *src++;
+			src++;
+			continue;
+		} else if(*src == '\\') {
+			src++;
+		} else if(*src == '`') {
+			src++;
+			// FIXME mirror $( )
+		} else
+			*dst++ = *src++;
 	}
+
+	*dst = '\0';
+
+	return strdup(buf);
 }
 
-static int is_redirect(char *str)
-{
-	while (*str && isspace(*str)) str++;
-	char *ptr = str;
-	char *tmp;
 
-	if ((ptr = strstr(str, "|>")) != NULL) 
+int evaluate(node *n, int pad, int do_next)
+{
+	debug_printf("%*sEVAL: [%s]", pad, pad_str, node_type(n->type));
+	node *tmp;
+	int rc = 0;
+	switch(n->type)
 	{
-		if (ptr == str) return 1;
-	} 
-	else if ((ptr = strchr(str, '>')) != NULL)
+		case N_FUNC:
+			debug_printf(": name=%s\n", n->value);
+			if (n->arg0) {
+				debug_printf("%*sbody:\n", pad+1, pad_str);
+				evaluate(n->arg0, pad+2, 1);
+			}
+			rc = true;
+			break;
+		case N_CASE:
+			// TODO
+			break;
+		case N_STRING:
+			rc = 0;
+			n->evaluated = expand(n->value, &rc);
+			debug_printf(": %s => %s\n", n->value, n->evaluated);
+			break;
+		case N_ASSIGN:
+			debug_printf(": %s = ", n->value);
+			if (n->arg0) {
+				n->arg0->evaluated = expand(n->arg0->value, &rc);
+				setshenv(cur_sh_env, n->value, n->arg0->evaluated);
+			} else
+				setshenv(cur_sh_env, n->value, "");
+			break;
+		case N_COMPOUND_COMMAND:
+			debug_printf(":\n");
+			if (n->arg0)
+				rc = evaluate(n->arg0, pad+1, do_next);
+			break;
+		case N_IF:
+			debug_printf("\n");
+			if (n->arg0) {
+				debug_printf("%*sif  :\n", pad+1, pad_str);
+				rc = evaluate(n->arg0, pad+2, 1);
+			}
+			if (rc && n->arg1) {
+				debug_printf("%*sthen:\n", pad+1, pad_str);
+				evaluate(n->arg1, pad+2, 1);
+			}
+			if (!rc && n->arg2) {
+				debug_printf("%*selse:\n", pad+1, pad_str);
+				evaluate(n->arg2, pad+2, 1);
+			}
+			break;
+		case N_SIMPLE:
+			debug_printf("\n");
+
+			if (n->arg0) {
+				debug_printf("%*spre:\n", pad+1, pad_str);
+				evaluate(n->arg0, pad+2, 1); 
+			}
+
+			if (n->arg1) {
+				char **tmpargs = NULL;
+				int tmpargc = 0;
+				debug_printf("%*scmd:", pad+1, pad_str);
+				
+#ifdef NDEBUG
+				print_node(n->arg1, pad+1, 1);
+#endif
+				if (n->arg1->type == N_STRING)
+					n->arg1->evaluated = expand(n->arg1->value, &rc);
+				else
+					err(EXIT_FAILURE, "N_SIMPLE");
+				push(&tmpargs, n->arg1->evaluated);
+
+				if (n->arg2) {
+					for (tmp = n->arg2; tmp; tmp=tmp->next)
+					{
+						if (tmp->type != N_STRING)
+							continue;
+						if (!push(&tmpargs, (tmp->evaluated = expand(tmp->value, &rc)))) {
+							rc = 1;
+							break;
+						}
+					}
+					for (size_t i = 0; tmpargs && tmpargs[i]; i++, tmpargc++) {
+						debug_printf("%*sarg[%lu]=%s\n", pad+2, pad_str, i, tmpargs[i]);
+					}
+				}
+
+				// check for builtins etc FIXME
+				
+				const struct builtin *bi = NULL;
+				for (size_t i = 0; (bi = &builtins[i])->name; i++)
+					if (!strcmp(tmpargs[0], bi->name))
+						break;
+
+				pid_t chd_pid;
+				
+				if ( (bi->name && bi->fork) || !bi->name)
+					chd_pid = fork();
+				else
+					chd_pid = 0;
+
+				if (chd_pid == 0) {
+					int rc;
+					if (bi->name)
+						rc = bi->func(tmpargc, tmpargs);
+					else {
+						rc = execvp(n->arg1->evaluated, tmpargs);
+						if (rc == -1) err(EXIT_FAILURE, "execvp: %s", n->arg1->evaluated);
+					}
+				} else if (chd_pid == -1) {
+					warn("execvp");
+					rc = 1;
+				} else {
+					rc = 1;
+					int res = 0;
+					waitpid(chd_pid, &res, 0);
+					if (WIFEXITED(rc)) rc = WEXITSTATUS(res);
+				}
+
+				if (tmpargs) {
+					/* tmpargs contains n->evaluated pointers, freeNode() handles these */
+					free(tmpargs);
+					tmpargs = NULL;
+				}
+			}
+
+			break;
+
+		default:
+			debug_printf("\n");
+			break;
+	}
+
+	if (n->next && do_next)
+		return evaluate(n->next, pad, 1);
+	else
+		return rc;
+}
+
+static node *newNode(const enum node_en type)
+{
+	node *ret = NULL;
+	if ((ret = calloc(1, sizeof(node))) == NULL)
+		err(EXIT_FAILURE, "newNode");
+
+	ret->type = type;
+	return ret;
+}
+
+void freeNode(node *restrict node, const bool free_next)
+{
+	if (!node) return;
+
+	if(node->arg0)  { freeNode(node->arg0, true);	node->arg0 = NULL;		}
+	if(node->arg1)  { freeNode(node->arg1, true);	node->arg1 = NULL;		}
+	if(node->arg2)  { freeNode(node->arg2, true);	node->arg2 = NULL;		}
+	if(node->arg3)  { freeNode(node->arg3, true);	node->arg3 = NULL;		}
+	if(node->value) { free(node->value);			node->value = NULL;		}
+	if(node->evaluated) { free(node->evaluated);	node->evaluated = NULL; }
+
+	if(free_next && node->next) { freeNode(node->next, true); node->next = NULL; }
+	
+	free(node);
+}
+
+node *nCaseItem(node *restrict pattern, node *restrict compound_list)
+{
+	node *ret = newNode(N_CASEITEM);
+	ret->arg0 = pattern;
+	ret->arg1 = compound_list;
+	return ret;
+}
+
+node *nFunc(char *restrict fname, node *restrict body)
+{
+	node *ret = newNode(N_FUNC);
+	ret->value = strdup(fname);
+	ret->arg0 = body;
+	return ret;
+}
+
+node *nAssign(char *restrict str)
+{
+	node *ret = newNode(N_ASSIGN);
+	char *tok = strchr(str, '=');
+	ret->value = strndup(str, tok - str);
+	ret->arg0 = nString(tok + 1);
+	return ret;
+}
+
+node *nFor(char *restrict name, char *restrict wordlist, node *restrict do_group)
+{
+	node *ret = newNode(N_FOR);
+	ret->value = strdup(name);
+	if (wordlist)
+		ret->arg0 = nString(wordlist);
+	ret->arg1 = do_group;
+	return ret;
+}
+
+node *nWhile(node *restrict compound_list, node *restrict do_group)
+{
+	node *ret = newNode(N_WHILE);
+	ret->arg0 = compound_list;
+	ret->arg1 = do_group;
+	return ret;
+}
+
+node *nUntil(node *restrict compound_list, node *restrict do_group)
+{
+	node *ret = newNode(N_UNTIL);
+	ret->arg0 = compound_list;
+	ret->arg1 = do_group;
+	return ret;
+}
+
+node *nCompound(node *restrict command, node *restrict redirect)
+{
+	node *ret = newNode(N_COMPOUND_COMMAND);
+	ret->arg0 = command;
+	ret->arg1 = redirect;
+	return ret;
+}
+
+node *nodeAppend(node *restrict item, node *restrict to)
+{
+	node *tmp = to;
+	for(; tmp->next; tmp=tmp->next) ;
+	//printf(" appending %p[%s] to %p[%s]\n", item, node_type(item->type), tmp, node_type(tmp->type));
+	tmp->next = item;
+	return to;
+}
+
+node *nIf(node *restrict ifstmt, node *restrict iftrue, node *restrict iffalse)
+{
+	node *ret = newNode(N_IF);
+	ret->arg0 = ifstmt;
+	ret->arg1 = iftrue;
+	ret->arg2 = iffalse;
+	return ret;
+}
+
+node *nSimple(node *restrict pre, node *restrict cmd, node *restrict suf)
+{
+	node *ret = newNode(N_SIMPLE);
+	ret->arg0 = pre;
+	ret->arg1 = cmd;
+	ret->arg2 = suf;
+	//printf(" creating nSimple(%s,%s,%s)\n",
+	//		pre ? node_type(pre->type) : "",
+	//		cmd ? node_type(cmd->type) : "",
+	//		suf ? node_type(suf->type) : ""
+	//		);
+	return ret;
+}
+
+node *nCase(char *restrict word, node *restrict case_list)
+{
+	node *ret = newNode(N_CASE);
+	ret->value = strdup(word);
+	ret->arg0 = case_list;
+	return ret;
+}
+
+node *nIoRedirect(int func, char *restrict iofile)
+{
+	// FIXME
+	node *ret = newNode(N_IOREDIRECT);
+	ret->token = func;
+	switch(func)
 	{
-		if (ptr == str) return 1;
-		tmp = ptr-1;
-		while (tmp >= str) if (!isdigit(*tmp--)) return 0;
+		case '>':
+		case DGREAT:
+		case GREATAND:
+		case CLOBBER:
+			ret->num = 1;
+			break;
+		case LESSAND:
+		case '<':
+		case DLESS:
+			ret->num = 0;
+			break;
+		default:
+			errx(EXIT_FAILURE, "nIoRedirect: unknown %d", func);
+
+	}
+	ret->value = strdup(iofile);
+	return ret;
+}
+
+node *nPattern(char *restrict str)
+{
+	node *ret = newNode(N_PATTERN);
+	ret->value = strdup(str);
+	return ret;
+}
+
+node *nString(char *restrict str)
+{
+	node *ret = newNode(N_STRING);
+	ret->value = strdup(str);
+	return ret;
+}
+
+node *nOp(int op, node *restrict lhs, node *restrict rhs)
+{
+	node *ret = newNode(N_OP);
+	ret->token = op;
+	ret->arg0 = lhs;
+	ret->arg1 = rhs;
+	return ret;
+}
+
+node *nSubshell(node *restrict body)
+{
+	node *ret = newNode(N_SUBSHELL);
+	ret->arg0 = body;
+	return ret;
+}
+
+static bool isquote(const char chr, const int type)
+{
+	static const char base[]	= "|&;<>()$`\\\"' \t\n";
+	static const char special[]	= "*?[#~=%";
+	static const char doubleq[]	= "$`\"\\\n";
+
+	if (chr == '\0') return false;
+	else if (type & QUOTE_BASE && (strchr(base, chr) != NULL)) return true;
+	else if (type & QUOTE_SPECIAL && (strchr(special, chr) != NULL)) return true;
+	else if (type & QUOTE_DOUBLE && (strchr(doubleq, chr) != NULL)) return true;
+
+	return false;
+}
+
+static int isoperator(const char *src)
+{
+	static const char *ops2[] = {
+		"&&",
+		"||",
+		";;",
+		"<<",
+		">>",
+		"<&",
+		">&",
+		"<>",
+		">|",
+		NULL
+	};
+	static const char ops1[] = "&()\n|;<>";
+
+	if (!*src) return 0;
+
+	if (!strncmp("<<-", src, 3)) return 3;
+
+	for (int i = 0; ops2[i]; i++)
+		if (!strncmp(ops2[i], src, 2)) return 2;
+
+	if (strchr(ops1, *src) != NULL) {
 		return 1;
-	} 
-	else if ((ptr = strchr(str, '<')) != NULL)
-	{
-		if (ptr == str) return 1;
-		tmp = ptr-1;
-		while (tmp >= str) if (!isdigit(*tmp--)) return 0;
 	}
 
 	return 0;
 }
 
-/**
- * tmp - first char to process
- * close - char to look for for close = one of )}`
- * type - { or ( or `
- * dst - output buffer (for expansion)
- * buf - buffer for snprintf n calc
- * rc - current rc
- *
- * $( ) or `` expand a new sub-shell replacing the command with the output
- *
- * ( ) run a new sub-shell
- * { } run a set of commands in the same env
- *
- */
-static int process_sub_shell(char **tmp, char close, char type, char **dst, const char *buf, const int rc)
+inline static const map_t *lookup_token(const char *token)
 {
-	char *start = *tmp;
-//	char *end = NULL;
-	char *ptr = start;
-
-	int dbl_quot = 0, sing_quot = 0;
-
-	while (*ptr)
-	{
-		if (!dbl_quot && !sing_quot && *ptr == close) {
-//			end = ptr - 1;
-			break;
-		}
-
-		if (!sing_quot && *ptr == '\\') ptr++;
-		else if (!sing_quot && !dbl_quot && *ptr == '\'') sing_quot = 1;
-		else if (!sing_quot && !dbl_quot && *ptr == '"') dbl_quot = 1;
-		else if (sing_quot && *ptr == '\'') sing_quot = 0;
-		else if (!sing_quot && dbl_quot && *ptr == '"') dbl_quot = 0;
-
-		ptr++;
+	for (int i = 0; lookup[i].str; i++) {
+		if (!strcmp(token, lookup[i].str)) return &lookup[i];
 	}
-
-	return 0;
+	return NULL;
 }
 
-static int process_expansion(char **dst, const char *buf, char **tmp, const int rc, int dep)
+static void cleanup()
 {
-	/* the first char being processed */
-	char ch = **tmp;
-	/* lookup the next, could be \0 */
-	char nextch = *((*tmp)+1);
+	regfree(&reg_assignment);
+	regfree(&reg_name);
+	if (here_doc_remaining) free(here_doc_remaining);
+	if (here_doc_word) free(here_doc_word);
+}
 
-	char *end = NULL;
-	char *var = NULL;
-	char *tmpstr = NULL;
+static const map_t *category(const char *token, const char *next, const map_t *restrict prev)
+{
+	size_t len = 0;
+	const map_t *map = NULL;
 
-	int wrl = 0;
-
-	/* return value */
-	int len = 0;
-
-	/* $ENV */
-	if (ch == '$' && isalpha(nextch)) 
-	{
-		end = (*tmp) + 2;
-		wrl = 1;
-		while (*end && isalnum(*end++)) wrl++;
-
-		if ((tmpstr = strndup((*tmp) + 1, wrl)) == NULL) {
-			warn(NULL);
-			goto ex_fail;
+	if (token == NULL || !strlen(token)) {
+		return NULL;
+	} else if ((map = lookup_token(token))) {
+		if (map->tok == Lbrace) {
+			if(in_func) func_brace = in_brace;
+			in_brace++;
+		} else if (map->tok == Rbrace) {
+			in_brace--;
+			if(in_brace == func_brace) in_func=0;
+		} else if (map->tok == If) {
+			in_if++;
+		} else if (map->tok == Fi) {
+			in_if--;
+		} else if (map->tok == Case) {
+			in_case = true;
+		} else if (map->tok == For) {
+			in_for = true;
+		/* to support "A=1) ;;" */
+		} else if (in_case && map->tok == In) {
+			in_case_in = true;
+		} else if (in_for && map->tok == In) {
+			in_for_in = true;
+		} else if (map->tok == Esac) {
+			in_case = false; in_case_in = false;
+		} else if (map->tok == DSEMI) {
+			in_case_in = true;
+		} else if (map->tok == Do) {
+			in_for_in = false;
+			in_do = true;
+		} else if (map->tok == Done) {
+			in_do = false;
+			in_for_in = false;
+			in_for = false;
 		}
-
-		env_t *env;
-		if ((env = getshenv(cur_sh_env, tmpstr)) != NULL)
-		{
-			wrl = snprintf(*dst, BUFSIZ - (*dst - buf), "%s", env->val);
-			*dst += wrl;
-			len += wrl;
+		return map;
+	} else if ((!in_case && !in_case_in) && regexec(&reg_assignment, token, 0, NULL, 0) == 0) {
+		return &assignment_word;
+	} else if (isdigit(*token)) {
+		char *tmp = (char *)(token + 1);
+		while(*tmp) {
+			if (!isdigit(*tmp) && (len = isoperator(tmp)) && (strlen(tmp) == len)) {
+				*tmp = '\0';
+				return &io_number;
+			}
+			else if (isdigit(*tmp)) tmp++;
+			else break;
 		}
-		free(tmpstr);
-		tmpstr = NULL;
-		*tmp = end;
-	} 
-	/* $0 - $9 */
-	else if (ch == '$' && isdigit(nextch)) 
-	{
-		wrl = snprintf(*dst, BUFSIZ - (*dst - buf), "ARGV[%d]", nextch - 0x30);
-		len += wrl;
-		*dst += wrl;
-		*tmp+=2;
-	}
-	/* $?... */
-	else if (ch == '$' && nextch == '{')
-	{
-		end = strchr((*tmp) + 2, '}');
-		if (end == NULL) {
-			warnx("unterminated ${}");
-			goto ex_fail;
-		}
-		*end = '\0';
-		env_t *env;
-		if ((env = getshenv(cur_sh_env, (*tmp)+2)) != NULL)
-		{
-			wrl = snprintf(*dst, BUFSIZ - (*dst - buf), "%s", env->val);
-			*dst += wrl;
-			len += wrl;
-		} 
-		*tmp = end + 1;
-	} else if (ch == '$' && nextch == '(' && *((*tmp)+2) == '(' ) {
-		var = strstr((*tmp)+3, "))");
-		if (var == NULL) {
-			warnx("unterminated $(())");
-			goto ex_fail;
-		}
-		*var = '\0';
-		warnx("unprocessed arithmetic expansion: $((%s))\n", (*tmp)+3);
-		*tmp = var + 3;
-	} else if (ch == '`' || nextch == '(') {
-		int open = 1;
-		int inner_double = 0, inner_single = 0;
-		var = (ch == '`') ? (*tmp)+1 : (*tmp)+2;
-		while (*var)
-		{
-			if (!inner_single && *var == '\\') {
-				if (!*(var+1)) {
-					warnx("trailing escape '\\' at end");
-					goto ex_fail;
+	} else if (regexec(&reg_name, token, 0, NULL, 0) == 0) {
+		if (prev && prev->tok == For) return &name;
+		else if (next && *next) {
+			char *tmp = (char *)next;
+			while (*tmp) {
+				if (isblank(*tmp)) tmp++;
+				else if (*tmp == '(') {
+					if (in_func) {
+						warnx("nested functions are not supported");
+						break;
+					}
+					in_func = 1;
+					return &name;
 				}
-				var++;
-			} else if (!inner_single && !inner_double && *var == '\'') {
-				inner_single = 1;
-			} else if (!inner_single && !inner_double && *var == '"') {
-				inner_double = 1;
-			} else if (inner_single && *var == '\'') {
-				inner_single = 0;
-			} else if (inner_double && *var == '"') {
-				inner_double = 0;
-			} else if ((inner_single && *var != '\'') || 
-					(inner_double && *var != '"')) {
-				;
-			} else if (ch == '`' && *var == '`') {
-				open--;
-				break;
-			} else {
-				if (*var=='(') open++;
-				if (*var==')') open--;
-				if (ch != '`' && !open) break;
+				else break;
 			}
-			var++;
 		}
-		if (open || inner_double || inner_single) {
-			warnx("unterminated )");
-			goto ex_fail;
-		}
-		*var = '\0';
-		invoke_shell((ch == '`') ? (*tmp)+1 : (*tmp)+2, rc, dep+1); // FIXME where is the return?
-		*tmp = var + 1;
-	} else if (ch == '$' && nextch == '$') {
-		wrl = snprintf(*dst, BUFSIZ - (*dst - buf), "%d", getpid());
-		*dst += wrl;
-		len += wrl;
-		*tmp += 2;
-	} else if (ch == '$' && nextch == '?') {
-		wrl = snprintf(*dst, BUFSIZ - (*dst - buf), "%d", rc);
-		*dst += wrl;
-		len += wrl;
-		*tmp += 2;
 	}
-	//printf("returning %d\n", len);
-	return len;
-ex_fail:
-	return -1;
+	return &word;
 }
 
-static const char *pad = "";
-
-/**
- * process_args
- *
- * splits a string into arguments (argc, argv). 
- *
- * expands expansions, single quote and double quotes, as well as back-tick
- * and backslash escapes
- *
- * should any sh(1) terminating
- * string be found (e.g. | or ;) will stop processing and fill next with the
- * unprocessed buf location
- *
- * extracts redirect strings (unprocessed) into redirects
- *
- * returns the resultant return code
- *
- * buf - buffer to process
- * argc - return of argument count processed
- * argv - return of array of pointers to arguments (NULL terminated)
- * next - return of start of unprocessed input (or NULL)
- * rc - current value of $?
- * redirects - return of array of pointers to redirects (NULL terminated, unprocessed)
- */
-static int process_args(const char *buf, int *argc, char ***argv, char **next, int rc, char ***redirects, int *newenv, int dep)
+static char *get_next_token(char *const str, char **next)
 {
-	const char *ptr = buf;
-	const char *end = buf + strlen(buf);
-	int ac = 0, rdc = 0;
-	char **av = NULL, **rd = NULL;
-	int in_single_quote = 0;
-	int in_double_quotes = 0;
-	*next = NULL;
-	int in_redirects = 0;
+	static char buf[BUFSIZ];
+	char *dst = buf;
+	char *src = str;
+	char *mark = NULL, *tmp = NULL;
+	size_t len = 0;
 
-	/* outer loop, each interation skips unquoted spaces & unprintable characters
-	 * before processing a single argument, pushing onto *argv */
-	while(ptr <= end && *ptr != '\0')
+	memset(buf, 0, sizeof(buf));
+
+	if (!src) return NULL;
+
+	while(*src)
 	{
-		/* skip <blank> and garbage */
-		if(isspace(*ptr)) goto next;
-		else if(!isprint(*ptr)) goto next;
+		if (*src == '\\' && isquote(*(src+1), QUOTE_BASE)) {
+			*dst++ = *++src;
+		} else if (*src == '"') {
+			mark = src;
+			*dst++ = *src++;
+			while(*src)
+			{
+				if (*src == '\\' && isquote(*(src+1), QUOTE_DOUBLE)) {
+					*dst++ = *src++;
+					*dst++ = *src++;
+				} else if (*src == '"') {
+					*dst++ = *src++;
+					break;
+				} else
+					*dst++ = *src++;
+			}
+			if (!*src) errx(EXIT_FAILURE, "Unterminated double quote at: %s", mark);
+		} else if (*src == '\'') {
+			*dst++ = *src++;
+			while(*src && *src != '\'') *dst++ = *src++;
+			if (!*src) errx(EXIT_FAILURE, "Unterminated single quote");
+			*dst++ = *src++;
+		} else if (*src == '<' && *(src+1) == '<' && isalpha(*(src+2))) {
+			here_doc = true;
+			char *tmp = src+2;
 
-		/* used to look ahead of outer loop pointer */
-		char *tmp = (char *)ptr;
+			while (*tmp)
+				if (!isalpha(*tmp)) break;
+				else tmp++;
 
-
-		//printf("%*s processing_args(\"%s\",%d,\"%s\")\n", dep, pad, ptr, *argc, next ? *next : NULL);
-
-		/* handle controls strings with no <blank> to the right */
-		if(*ptr == ';') {
-			*tmp++ = '\0';
-			*next = tmp;
-			break;
-		} else if(*ptr == '|' && *(ptr+1) != '|') {
-			// setup_pipe
-			if (!pipe_mode) pipe_mode = 1;
-			else if (pipe_mode == 1) pipe_mode = 3;
-			else if (pipe_mode == 2) pipe_mode = 3;
-			*newenv = 1;
-			*next = tmp+1;
-			*tmp++ = '\0';
-			printf("%*spipe1\n", dep, pad);
-			break;
-		} else if(*ptr == '&' && *(ptr+1) != '&') {
-			// setup_fork
-			//printf("fork3\n");
-			fork_mode = 1;
-			pipe_mode = 0;
-			*tmp++ = '\0';
-			*next = tmp;
-			break;
-		} else if(*ptr == '|' && (*ptr+1) == '|') {
-			// setup_list_or
-			pipe_mode = 0;
-			*tmp++ = '\0';
-			*tmp++ = '\0';
-			*next = tmp;
-			break;
-		} else if(*ptr == '&' && (*ptr+1) == '&') {
-			// setup_list_and
-			pipe_mode = 0;
-			*tmp++ = '\0';
-			*tmp++ = '\0';
-			*next = tmp;
-			break;
-		}
-
-		/* the length of this argument */
-		int len = 0;
-
-		/* temporary buffer & pointer therein */
-		char buf[BUFSIZ+1];
-		char *dst = buf;
-		memset(dst, 0, BUFSIZ+1);
-
-		/* inner loop, extracts a single argument. handles single & double quotes
-		 * as well as backslask escapes and shell expansions */
-		while(*tmp && isprint(*tmp)) {
-			if (!in_single_quote && *tmp == '\\') {
-				if (!*(tmp+1)) {
-					warnx("trailing escape '\\' at end");
-					goto clean_nowarn;
+			if (tmp - (src+2) < 1)
+				errx(EXIT_FAILURE, "No delimiter for heredoc");
+			
+			here_doc_delim = strndup(src+2, tmp - (src+2));
+			if (here_doc_remaining)
+				free(here_doc_remaining);
+			here_doc_remaining = strdup(src + (tmp - src));
+			
+			if (next) *next = NULL;
+			return NULL;
+		} else if (*src == '$' || *src == '`') {
+			if (*src == '$') {
+				if (*(src+1) == '{') {
+					while (*src != '}')
+						*dst++ = *src++;
+				} else if (*(src+1) == '(' && *(src+2) == '(') {
+					char *end = strstr(src+3, "))");
+					if (!end) errx(EXIT_FAILURE, "Unterminated $((");
+					len = (end + 2) - src;
+					strncpy(dst, src, len);
+					dst += len;
+					src += len;
+				} else if (*(src+1) == '(') {
+					int depth = 1;
+					char *end = src+2;
+					while(*end && depth) {
+						if (*end == ')' && *(end-1) != '\\') depth--;
+						else if (*end == '$' && *(end+1) == '(') depth++;
+						else
+							end++;
+					}
+					if (depth) errx(EXIT_FAILURE, "Unterminated $(");
+					len = (end + 1) - src;
+					strncpy(dst, src, len);
+					dst += len;
+					src += len;
+				} else
+					*dst++ = *src++;
+			} else
+				*dst++ = *src++;
+		} else if ((len = isoperator(src)) != 0) {
+			if ( (*src == '<' || *src == '>') && dst > buf) {
+				for (tmp = src; tmp > str;) {
+					if (!isdigit(*(tmp-1))) break;
+					tmp--;
 				}
-				*(dst++) = *(tmp+1);
-				memmove((void *)tmp, tmp+1, strlen(tmp));
 
-				len++; tmp++;
-				continue;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '\'') {
-				in_single_quote = 1;
-				ptr++; len--; tmp++;
-				continue;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '"') {
-				in_double_quotes = 1;
-
-				ptr++; len--; tmp++;
-				continue;
-			} else if (in_single_quote && *tmp == '\'') {
-				in_single_quote = 0;
-
-				len++; tmp++;
-				break;
-			} else if (in_double_quotes && *tmp == '"') {
-				in_double_quotes = 0;
-
-				len++; tmp++;
-				break;
-			} else if (!in_single_quote && !in_double_quotes && isspace(*tmp)) {
-				break;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '&' && *(tmp+1) != '&' ) {
-				fork_mode = 1;
-				*tmp++ = '\0';
-				*next = tmp;
-				break;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '|' && *(tmp+1) != '|' ) {
-				if (!pipe_mode) pipe_mode = 1;	
-				else if (pipe_mode == 1) pipe_mode = 2;
-				*tmp++ = '\0';
-				*next = tmp;
-				printf("%*s  pipe2\n", dep, pad);
-				break;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '&' && *(tmp+1) == '&' ) {
-				*tmp++ = '\0';
-				*tmp++ = '\0';
-				*next = tmp;
-				break;
-			} else if (!in_single_quote && !in_double_quotes && *tmp == '|' && *(tmp+1) == '|' ) {
-				*tmp++ = '\0';
-				*tmp++ = '\0';
-				*next = tmp;
-				break;
+				if (tmp >= str) {
+					//dst -= (src - tmp);
+					//*dst = '\0';
+					//src -= (src - tmp);
+					
+					/* the operator is not part of IO_NUMBER, but if we remove it, 
+					 * the categoriser has doesn't work */
+					strncat(buf, src, len);
+					break;
+				} else {
+					while(len--) *dst++ = *src++;
+					break;
+				}
 			}
-			else if (!in_single_quote && !in_double_quotes && (*tmp == '{' || *tmp == '('))
-			{
-				*tmp+=1;
-				int ex_rc = process_sub_shell(&tmp, *tmp == '{' ? '}' : ')', *tmp, &dst, buf, rc);
-				if (ex_rc == -1)
-					goto clean_nowarn;
-				len += ex_rc;
-			}
-			/* handle $ followed by something other than whitespace */
-			else if (!in_single_quote && (*tmp == '$' || *tmp == '`') && *(tmp+1) && !isspace(*(tmp+1))) 
-			{
-				/* refactor this into a function, so that it can be called
-				 * recursively, e.g. inside $(()) 
-				 *
-				 * buf is needed for snprintf() protection
-				 *
-				 * rc for child invoke_shell() - FIXME how to handle rc return?
-				 *
-				 * len += expand_dollar(&dst, buf, &tmp, rc);
-				 *
-				 * treat -1 as 'clean_nowarn'
-				 */
-				//printf("was: dst=%s, buf=%s, tmp=%s len=%d\n", dst, buf, tmp, len);
-				int ex_rc = process_expansion(&dst, buf, &tmp, rc, dep);
-				if (ex_rc == -1)
-					goto clean_nowarn;
-				len += ex_rc;
-				//printf(" is: dst=%s, buf=%s, tmp=%s len=%d\n", dst, buf, tmp, len);
-			} else {
-				*(dst++) = *tmp;
-				len++;
-				tmp++;
-			}
-		}
-
-		if (in_single_quote) {
-			warnx("unterminated single quote");
-			goto clean_nowarn;
-		}
-
-		if (in_double_quotes) {
-			warnx("unterminated double quotes");
-			goto clean_nowarn;
-		}
-
-		/* if we have an argument, grow *argv and append a pointer */
-		if(len>0) {
-			*dst = '\0';
-
-			/* handle <, >, >>, |> */
-			if (is_redirect(buf)) {
-				in_redirects = 1;
-
-				char **nrd = realloc(rd, sizeof(char *) * (rdc+2));
-				if (nrd == NULL) goto clean_fail;
-				rd = nrd;
-
-				if ((rd[rdc] = strdup(buf)) == NULL) goto clean_fail;
-				rdc++;
-				rd[rdc] = NULL;
-
-				ptr = tmp;
-				goto next;
-			} else if (in_redirects) {
-				in_redirects = 0;
-			}
-
-			char **nav = realloc(av, sizeof(char *) * (ac+2));
-			if (nav == NULL) goto clean_fail;
-			av = nav;
-
-			if ((av[ac] = strdup(buf)) == NULL) goto clean_fail;
-			ac++;
-			av[ac] = NULL;
-			//printf("%*s  adding arg '%s'\n", dep, pad, buf);
-
-			len = strlen(buf) - 1;
-		}
-
-		ptr = tmp; // was before }
-next:
-
-		if (*next) break;
-		ptr++; // FIXME reading ptr now causes a valgrind issue
-		continue;
-	}
-
-
-	/* ensure *argv is NULL terminated */
-	char **nav = realloc(av, sizeof(char *) * (ac+1));
-	if (nav == NULL) goto clean_fail;
-	av = nav;
-
-	av[ac] = NULL;
-
-	*argc = ac;
-	*argv = av;
-
-	//printf("%*s process_args resulted in %d args\n", dep, pad, *argc);
-
-	return EXIT_SUCCESS;
-
-clean_fail:
-	warn(NULL);
-clean_nowarn:
-	if (av) {
-		for (int i = 0; i < ac; i++)
-		{
-			if (av[i]) {
-				free(av[i]);
-				av[i] = NULL;
-			}
-		}
-		free(av);
-		av = NULL;
-	}
-	return EXIT_FAILURE;
-}
-
-static void trim(char *buf)
-{
-	char *ptr = buf + strlen(buf) - 1;
-	while (*ptr && isspace(*ptr)) *ptr-- = '\0';
-}
-
-static int inside_if = 0;
-static int inside_then = 0;
-static int inside_else = 0;
-
-static int invoke_shell(char *line, int old_rc, int dep)
-{
-	int argc = 0;
-	char **argv = NULL;
-	char **redirects = NULL;
-	char *next;
-	int newenv = 0;
-
-	/* skip leading and trailing white space */
-	while (*line && isspace(*line)) line++;
-	trim(line);
-	printf("%*sinvoke_shell=%s\n", dep, pad, line);
-
-	if (process_args(line, &argc, &argv, &next, old_rc, &redirects, &newenv, dep) != EXIT_SUCCESS)
-		return EXIT_FAILURE;
-	printf("%*s        rest=%s\n", dep, pad, next);
-
-	if(argc == 0 || argv == NULL || argv[0] == NULL)
-		return EXIT_SUCCESS;
-
-	int rc = old_rc;
-
-	/* line us now useless, as expansions will have happened */
-	int arglen = 0;
-	char *allargs = calloc(1,200);
-	int bufsiz = 200;
-	//printf("%*s setting allargs to %p\n", dep, pad, allargs);
-	for (int i = 1; i < argc && argv[i]; i++)
-	{
-		//printf("%*s processing argc=%d\n", dep, pad, i);
-		//printf("%*s processing argv[%d]=%s\n", dep, pad, i, argv[i]);
-		arglen += strlen(argv[i]);
-		if(arglen == 0) continue;
-		if (arglen > bufsiz)
-		{
-
-			while (bufsiz < (bufsiz+arglen+3)) 
-				bufsiz += 200;
-
-			//printf("%*s realloc: %p, %d\n", dep, pad, allargs, bufsiz);
-			char *tmpall = realloc(allargs, bufsiz);
-			//printf("%*s done\n", dep, pad);
-			if (tmpall == NULL) {
-				warnx("invoke_shell");
-				return -1;
-			}
-			allargs = tmpall;
-		}
-		strcat(allargs, argv[i]);
-		strcat(allargs, " ");
-		//printf("%*s done\n", dep, pad);
-	}
-
-	if (newenv)
-	{
-		// setup pipe for LHS
-	}
-
-	char *tmp = NULL;
-	if ((tmp = strchr(argv[0], '=')) != NULL && isname(argv[0], tmp - argv[0])) {
-		*tmp = '\0';
-		setshenv(cur_sh_env, argv[0], tmp+1);
-		rc = invoke_shell(allargs, old_rc, dep+1);
-	} else if (!strcmp(argv[0], "if")) {
-		if (inside_if && !inside_then) goto unexpected;
-		inside_if++;
-		//printf(" invoke from if\n");
-		rc = invoke_shell(allargs, old_rc, dep+1);
-	} else if (!strcmp(argv[0], "then")) {
-		if (!inside_if || inside_then) goto unexpected;
-		inside_then++;
-		//printf(" invoke from then");
-		if (!rc) rc = invoke_shell(allargs, rc, dep+1);
-	} else if (!strcmp(argv[0], "else")) {
-		if (!inside_if || !inside_then) goto unexpected;
-		if (inside_then) inside_then--;
-		inside_else++;
-		//printf(" invoke from else");
-		if (rc) rc = invoke_shell(allargs, rc, dep+1);
-	} else if (!strcmp(argv[0], "fi")) {
-		if (!inside_if && !(inside_then || inside_else)) goto unexpected;
-		if (inside_then) inside_then--;
-		if (inside_else) inside_else--;
-		inside_if--;
-	} else {
-		//printf("%*s running %s with %s\n", dep, pad, argv[0], allargs);
-		printf("\n%*sfork_mode=%d, pipe_mode=%d, cmd=%s, args='%s'\n", dep, pad,
-				fork_mode, pipe_mode, argv[0], allargs);
-
-		if (pipe_mode == 1) {
-			if (pipe(pipe_fd) == -1)
-				warn("%s", argv[0]);
-			else
-				printf("%*s pipe[%d,%d]\n", dep, pad, pipe_fd[0], pipe_fd[1]);
-			
-			cur_sh_env->fds[STDOUT_FILENO] = pipe_fd[1];
-			pipe_fd[1] = -1;
-			cur_sh_env->fds[STDIN_FILENO] = STDIN_FILENO;
-			pipe_mode = 2;
-		} 
-		else if (pipe_mode == 2) 
-		{
-			cur_sh_env->fds[STDOUT_FILENO] = STDOUT_FILENO;
-			cur_sh_env->fds[STDIN_FILENO] = pipe_fd[0];
-			pipe_fd[0] = -1;
-
-			if (pipe(pipe_fd) == -1)
-				warn("%s", argv[0]);
-			else
-				printf("%*s pipe[%d,%d]\n", dep, pad, pipe_fd[0], pipe_fd[1]);
-		} 
-		else if (pipe_mode == 3) 
-		{
-			cur_sh_env->fds[STDIN_FILENO] = pipe_fd[0];
-			pipe_fd[0] = -1;
-			
-			if (pipe(pipe_fd) == -1)
-				warn("%s", argv[0]);
-			else
-				printf("%*s pipe[%d,%d]\n", dep, pad, pipe_fd[0], pipe_fd[1]);
-
-			cur_sh_env->fds[STDOUT_FILENO] = pipe_fd[1];
-			pipe_fd[1] = -1;
-			pipe_mode--;
-		}
-		else if (pipe_mode == 0)
-		{
-			cur_sh_env->fds[STDOUT_FILENO] = STDOUT_FILENO;
-			cur_sh_env->fds[STDIN_FILENO] = STDIN_FILENO;
-		}
-
-		const struct builtin *bi = NULL;
-		for (int i = 0; (bi = &builtins[i])->name; i++)
-			if (!strcmp(argv[0], bi->name))
+			if (dst > buf) break;
+			while(len--) *dst++ = *src++;
+			break;
+		} else if (isblank(*src)) {
+			while(*src && isblank(*src)) src++;
+			if (dst > buf) 
 				break;
-
-		if (bi->name && bi->fork) {
-			rc = builtin(bi->func, argc, argv, fork_mode);
-		} else if (bi->name) {
-			rc = bi->func(argc, argv);
-		} else {
-			rc = builtin(cmd_external, argc, argv, fork_mode);
-		}
+		} else if (*src == '#') {
+			while(*src && *src != '\n') src++;
+		} else
+			*dst++ = *src++;
 	}
-
-done:
-	if (allargs) {
-		free(allargs);
-		allargs = NULL;
-	}
-
-	for (int i = 0; i < argc; i++ )
-	{
-		if (argv[i]) {
-			free(argv[i]);
-			argv[i] = NULL;
-		}
-	}
-	free(argv);
-	argv = NULL;
 
 	if (next) {
-		if (newenv) {
-			cur_sh_env = clone_env(cur_sh_env, "tbc");
-			newenv = 0;
-			// set-up pipe for RHS
-		}
-		//fprintf(stdout, " recurse: if=%d, then=%d, else=%d, next=%s\n",
-		//		inside_if, inside_then, inside_else, next);
-		rc = invoke_shell(next, rc, dep+1);
+		if (*src) {
+			*next = src;
+		} else
+			*next = NULL;
 	}
 
-	return rc;
-unexpected:
-	warnx("unexpected %s", argv[0]);
-	/*
-	   warnx("unexpected %s (if=%d,then=%d,else=%d)", argv[0],
-	   inside_if, inside_then, inside_else);
-	   */
-	inside_if = inside_then = inside_else = 0;
-	goto done;
+	len = strlen(buf) - 1;
+	for(int i = len; i >= 0 && isblank(buf[i]); i--)
+		buf[i] = '\0';
+
+	return strlen(buf) ? buf : NULL;
 }
 
-static void reset_terminal()
+static void parser_init()
 {
-	/*
-	   struct termios tios;
-	   if (tcgetattr(STDIN_FILENO, &tios) == -1)
-	   err(EXIT_FAILURE, "unable to reset terminal");
-
-	   tios.c_lflag |= (ICANON|ECHO);
-
-	   if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
-	   err(EXIT_FAILURE, "unable to reset terminal");
-	   */
-}
-
-static void clean_env()
-{
-	if (cur_sh_env != NULL) {
-		free_ex_env(cur_sh_env);
-		cur_sh_env = NULL;
-	}
-}
-
-/* exported function defintions */
-
-int main(int ac, char *av[])
-{
-	char *command_string = NULL;
-	char *command_name = NULL; 
-	char *command_file = NULL;
-
-	{
-		int opt = 0;
-		while ((opt = getopt(ac, av, "abCefhimnuvxo:cs")) != -1)
-		{
-			switch (opt)
-			{
-				case 'a':
-				case 'b':
-				case 'C':
-				case 'e':
-				case 'f':
-				case 'm':
-				case 'n':
-				case 'u':
-				case 'v':
-				case 'x':
-					if (parse_set('-',opt))
-						exit(EXIT_FAILURE);
-					break;
-				case 'o':
-					if (parse_set_option(optarg))
-						exit(EXIT_FAILURE);
-					break;
-
-				case 'c':
-					opt_command_string = 1;
-					break;
-				case 'i':
-					opt_interactive = 1;
-					break;
-				case 's':
-					opt_read_stdin = 1;
-					break;
-			}
-		}
-
-		if (optind < ac && (!strcmp(av[optind], "-") || !strcmp(av[optind], "--")))
-			optind++;
-
-		if (optind >= ac) {
-			if (opt_command_string)
-				errx(EXIT_FAILURE, "missing command string");
-			opt_read_stdin = 1;
-			goto opt_skip;
-		}
-
-
-		if (opt_command_string) {
-			command_string = av[optind++];
-		}
-
-		if (optind >= ac) goto opt_skip;
-
-		if (opt_command_string)
-			command_name = av[optind++];
-		else if (!opt_read_stdin)
-			command_file = av[optind++];
-opt_skip:	
-		;
-
-		if (!command_string && !command_name && !command_file && isatty(STDIN_FILENO))
-			opt_interactive = 1;
-	}
-
-	if (opt_interactive)
-		printf("zero-shell\nNB: this is not yet a proper implementation of sh(1)\n\n");
-
-	/*
-	   if (opt_command_string ) {
-	   int rc = EXIT_SUCCESS;
-	   exit(rc);
-	   }
-
-	   if (!opt_read_stdin && command_string) {
-	   int rc = EXIT_SUCCESS;
-	   exit(rc);
-	   }
-	   */
-
-	if (opt_interactive && isatty(STDIN_FILENO))
-	{
-		/*
-		   struct termios tios;
-		   if (tcgetattr(STDIN_FILENO, &tios) == -1)
-		   err(EXIT_FAILURE, NULL);
-
-		   tios.c_lflag &= ~(ICANON|ECHO);
-		   */
-		// FORK ISSUE atexit(reset_terminal);
-		/*
-		   if (tcsetattr(STDIN_FILENO, TCSANOW, &tios) == -1)
-		   err(EXIT_FAILURE, NULL);
-		   */
-	}
-
+	if (regcomp(&reg_assignment, reg_assignment_str, REG_EXTENDED))
+		errx(EXIT_FAILURE, "regcomp");
+	if (regcomp(&reg_name, reg_name_str, REG_EXTENDED))
+		errx(EXIT_FAILURE, "regcomp");
 	if ((cur_sh_env = calloc(1, sizeof(shenv_t))) == NULL)
-		err(EXIT_FAILURE, NULL);
-
-	// FORK ISSUE atexit(clean_env);
-
+		err(EXIT_FAILURE, "calloc: cur_sh_env");
 	if ((cur_sh_env->private_envs = calloc(1, sizeof(env_t *))) == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(EXIT_FAILURE, "calloc: cur_sh_env[0]");
 
-	/*
-	add_fds(cur_sh_env, 0, stdin);
-	add_fds(cur_sh_env, 1, stdout);
-	add_fds(cur_sh_env, 2, stderr);
-	*/
-
-	cur_sh_env->fds[0] = 0;
-	cur_sh_env->fds[1] = 1;
-	cur_sh_env->fds[2] = 2;
-
-	for (int i = 3; i < NUM_FDS; i++) cur_sh_env->fds[i] = -1;
-
-	cur_sh_env->name = strdup("master");
-
-	umask((cur_sh_env->umask = umask(0)));
-
-
-	if (signal(SIGCHLD, sig_chld) == SIG_ERR)
-		err(EXIT_FAILURE, "signal");
-
-	if (command_name == NULL)
-		command_name = av[0];
-
-	if (array_add(&cur_sh_env->argv, &cur_sh_env->argc, command_name) == -1)
-		err(EXIT_FAILURE, NULL);
-
-	/* used all over */
 	char buf[BUFSIZ] = {0};
 
 	char *shlvl_str = getenv("SHLVL");
@@ -1885,91 +1724,160 @@ opt_skip:
 
 	exportenv(env);
 
-	//dump_envs(cur_sh_env);
+	atexit(cleanup);
+}
 
-	/* -i and/or -s */
-	char *line = NULL;
-	if (!opt_command_string) {
-		line = buf;
-		*line = '\0';
+/* global function defintions */
+
+
+int yylex()
+{
+	char *old = NULL;
+
+	if (left == NULL)
+	{
+		left = parser_string;
+		parser_string = NULL;
 	}
-	//int c;
-	//int newline = 1;
-	int rc = 0;
 
+	if (!left) return 0;
+
+	yyline++; yyrow=0;
+
+again:
+	while(*left && isblank(*left)) left++;
+	if (!*left) return 0;
+	/*
+	static char buf[BUFSIZ] = {0};
+	if (feof(stdin) || ferror(stdin)) return 0;
+	if (left == NULL || !*left) {
+		if ((left = fgets(buf, BUFSIZ, stdin)) == NULL)
+			return 0;
+
+		while(*left && isblank(*left)) left++;
+		if(!*left) goto again;
+
+		yyline++;
+		yyrow = 0;
+	}
+	*/
+
+	old = left;
+	if (here_doc)
+	{
+		char *tmp = NULL;
+
+		if (!strncmp(left, here_doc_delim, strlen(here_doc_delim)))
+		{
+			yylval.string = here_doc_word;
+			free(here_doc_delim);
+			here_doc_delim = NULL;
+			here_doc = false;
+			//here_doc_word = NULL;
+			prev = &word;
+			free_left = true;
+			left = here_doc_remaining;
+			free_me = here_doc_remaining;
+			//here_doc_remaining = NULL;
+			return word.tok;
+		}
+
+		if (here_doc_word == NULL && (here_doc_word = strdup(left)) == NULL) {
+			err(EXIT_FAILURE, "yylex: strdup");
+		} else if (here_doc_word) {
+			int newlen = strlen(here_doc_word) + strlen(left) + 1;
+			if ((tmp = realloc(here_doc_word, newlen)) == NULL) {
+				err(EXIT_FAILURE, "yylex: realloc");
+			} else {
+				here_doc_word = tmp;
+			}
+			strcat(here_doc_word, left);
+		}
+
+		left = NULL;
+		goto again;
+	}
+	else
+	{
+		char *yytext = NULL;
+		while(*left && isblank(*left)) left++;
+		if(!*left) goto again;
+		
+		//printf("get_next_token([%s])\n", left);
+		if ((yytext = get_next_token(left, &left)) == NULL) {
+			if (here_doc) 
+				goto again;
+			warnx("no match/no data for [%s@%p] %x\n", old, old, old ? *old : '!');
+			return 0;
+		}
+
+		int ret = 0;
+
+		if ((prev = category(yytext, left, prev)) != NULL) {
+			/*
+			printf("matched: %s: [%s] tok=%d\n", 
+					prev->tok != NEWLINE ? prev->str : "\\n", 
+					(yytext && *yytext && *yytext != '\n') ? yytext : "_" ,
+					prev->tok);
+					*/
+			if (prev->tok == NEWLINE) 
+				yylval.chr = '\n';
+			else
+				yylval.string = yytext;
+			ret = prev->tok;
+		} else {
+			warnx("failed to match [%s@%p] %x\n", yytext, yytext, yytext ? *yytext : '!');
+		}
+
+		if (!left || !*left) {
+			if (in_case || in_case_in || in_do || in_for_in || in_for || in_brace>0 || in_func || in_if>0) {
+				// FIXME && || and EOL
+				//printf("need more\n");
+				get_next_parser_string();
+			}
+		}
+
+		return ret;
+	}
+}
+
+void yyparse();
+
+void yyerror(const char *s)
+{
+	warnx("\n[%d:%d] %s", yyline, yyrow, s);
+}
+
+static bool get_next_parser_string()
+{
+	static char buf[BUFSIZ] = {0};
+	memset(buf, 0, sizeof(buf));
+	parser_string = fgets(buf, BUFSIZ, stdin);
+
+	if (parser_string == NULL) {
+		if (feof(stdin))
+			return true;
+		exit(EXIT_FAILURE);
+	}
+	return false;
+}
+
+int main(int argc, char *argv[])
+{
 	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stdin, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+	parser_init();
 
 	while(1)
 	{
-		/*
-		   if (opt_interactive)
-		   {
-		   if (line < buf) line = buf;
-		   else if (line >= buf+sizeof(buf)) line = buf + sizeof(buf) - 1;
+		if (printf("# ") < 0)
+			exit(EXIT_FAILURE);
 
-		   if (newline) {*/
-		if (opt_interactive)
-			if (printf("# ") < 0)
-				exit(EXIT_FAILURE);
-
-
-		//fflush(stdout);
-		/*
-						  newline = 0;
-						  }
-
-						  if ((c = fgetc(stdin)) == EOF) {
-						  exit(feof(stdin) ? EXIT_SUCCESS : EXIT_FAILURE);
-						  }
-
-						  if (c == '\n' ) {
-						*line = '\0';
-						fputc(c, stdout);
-						rc = invoke_shell(buf, rc);
-						memset(buf, 0, strlen(buf)+1);
-						line = buf;
-						newline = 1;
-						} else {
-						*line++ = c;
-						fputc(c, stdout);
-						}
-						}
-
-						if (!opt_interactive)
-						{*/
-
-		if (opt_command_string && command_string && *command_string) {
-			sscanf(command_string, "%m[^\n]", &line);
-			if (line == NULL)
-				exit(EXIT_FAILURE);
-			command_string = NULL;
-		} else if (!opt_command_string) {
-			line = fgets(buf, BUFSIZ, stdin);
-
-			if(line == NULL) {
-				if(feof(stdin))
-					break;
-				exit(EXIT_FAILURE);
-			}
-		} else
+		if (get_next_parser_string())
 			break;
 
-		rc = invoke_shell(line, rc, 1);
-		if (opt_command_string) 
-		{
-			if (line) {
-				free(line);
-			line = NULL;
-			}
-		}
-		/*}
-
-		  if (opt_interactive) {*/
-		fflush(stdout);
-		fflush(stderr);
-		//}
+		//printf("parsing '%s'\n", parser_string);
+		yyparse();
 	}
-
-	clean_env();
-	exit(EXIT_SUCCESS);
 }

@@ -134,7 +134,7 @@ static int cmd_read(int, char *[]);
 static int cmd_set(int, char *[]);
 static int cmd_pwd(int, char *[]);
 static int cmd_exit(int, char *[]);
-static bool get_next_parser_string();
+static bool get_next_parser_string(int);
 
 /* constants */
 
@@ -179,9 +179,9 @@ static bool here_doc			= false;
 static bool free_left			= false;
 static bool in_case				= false;
 static bool in_case_in			= false;
-static bool in_do				= false;
+static int	in_do				= 0;
 static bool in_for_in			= false;
-static bool in_for				= false;
+static int	in_for				= 0;
 static bool in_brace			= false;
 static bool in_func				= false;
 static int	func_brace			= 0;
@@ -207,6 +207,8 @@ static int opt_xtrace = 0;
 /* external variables */
 
 extern YYSTYPE yylval;
+extern char **environ;
+
 
 /* local function defintions */
 
@@ -305,7 +307,6 @@ static env_t *setshenv(shenv_t *restrict sh, char *restrict name, const char *re
 			ret = NULL;
 			return NULL;
 		}
-		//printf("setshenv e->name to %p\n", ret->name);
 
 		sh->private_envs = tmp;
 		sh->private_envs[cnt++] = ret;
@@ -321,10 +322,15 @@ static env_t *setshenv(shenv_t *restrict sh, char *restrict name, const char *re
 		free(ret->val);
 		ret->val = NULL;
 	}
-	ret->val = strdup(value);
+	ret->val = value ? strdup(value) : NULL;
 
-	if (ret->exported)
-		setshenv(cur_sh_env, ret->name, ret->val);
+	if (ret->exported) {
+		if (ret->val) {
+			setenv(ret->name, ret->val, 1);
+		} else {
+			unsetenv(ret->name);
+		}
+	}
 
 	return ret;
 }
@@ -771,13 +777,13 @@ static int parse_set_option(char *opt)
 	return EXIT_SUCCESS;
 }
 
-static void dump_envs(shenv_t *sh)
+static void dump_envs(const shenv_t *restrict sh)
 {
-	env_t *e;
+	const env_t *e = NULL;
 
-	for (int i = 0; (e = sh->private_envs[i]); i++)
+	for (size_t i = 0; (e = sh->private_envs[i]); i++)
 	{
-		printf("[%2d] %s = %s", i, e->name, e->val);
+		printf("%s=%s", e->name, e->val ? e->val : "");
 		if (e->readonly) printf(" (ro)");
 		if (e->exported) printf(" (expt)");
 		fputc('\n', stdout);
@@ -788,6 +794,8 @@ static int cmd_set(const int ac, char *av[])
 {
 	int opt_show_vars = (ac == 1);
 	int opt_show_options = 0;
+
+	printf("ac=%d, av=%p\n", ac, av);
 
 	{
 		int opt;
@@ -1170,7 +1178,7 @@ int evaluate(node *n, int pad, int do_next)
 
 			if (n->arg1) {
 				char **tmpargs = NULL;
-				int tmpargc = 0;
+				int tmpargc = 1;
 				debug_printf("%*scmd:", pad+1, pad_str);
 				
 #ifdef NDEBUG
@@ -1523,9 +1531,9 @@ static const map_t *category(const char *token, const char *next, const map_t *r
 			in_case_in = true;
 		} else if (map->tok == Do) {
 			in_for_in = false;
-			in_do = true;
+			in_do++;
 		} else if (map->tok == Done) {
-			in_do = false;
+			in_do--;
 			in_for_in = false;
 			in_for = false;
 		}
@@ -1708,6 +1716,13 @@ static void parser_init()
 
 	char buf[BUFSIZ] = {0};
 
+	for (size_t i = 0; environ && environ[i]; i++) {
+		char *tok = strchr(environ[i], '=');
+		char *env = strndup(environ[i], environ[i] - tok);
+		setshenv(cur_sh_env, env, getenv(env));
+		free(env);
+	}
+
 	char *shlvl_str = getenv("SHLVL");
 	int shlvl = 1;
 	if (shlvl_str)
@@ -1830,10 +1845,11 @@ again:
 		}
 
 		if (!left || !*left) {
-			if (in_case || in_case_in || in_do || in_for_in || in_for || in_brace>0 || in_func || in_if>0) {
+			if (in_case || in_case_in || in_do>0 || in_for_in || in_for>0 || in_brace>0 || in_func || in_if>0) {
 				// FIXME && || and EOL
 				//printf("need more\n");
-				get_next_parser_string();
+				// FIXME only needed if iteractive, need old method otherwise? or not?
+				get_next_parser_string(1);
 			}
 		}
 
@@ -1848,10 +1864,14 @@ void yyerror(const char *s)
 	warnx("\n[%d:%d] %s", yyline, yyrow, s);
 }
 
-static bool get_next_parser_string()
+static bool get_next_parser_string(int prompt)
 {
 	static char buf[BUFSIZ] = {0};
 	memset(buf, 0, sizeof(buf));
+
+	if (prompt)
+		printf("> ");
+
 	parser_string = fgets(buf, BUFSIZ, stdin);
 
 	if (parser_string == NULL) {
@@ -1874,7 +1894,7 @@ int main(int argc, char *argv[])
 		if (printf("# ") < 0)
 			exit(EXIT_FAILURE);
 
-		if (get_next_parser_string())
+		if (get_next_parser_string(0))
 			break;
 
 		//printf("parsing '%s'\n", parser_string);

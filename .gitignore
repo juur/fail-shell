@@ -6,6 +6,7 @@ bin
 lib64
 *.swp
 src2
+y.tab.*
 usr
 proc
 sys

@@ -79,7 +79,7 @@ uninstall:
 .PHONY: mostly-clean clean distclean maintainer-clean
 
 mostlyclean:
-	$(RM) $(package_OBJS) y.tab.o
+	$(RM) $(package_OBJS) y.tab.o $(addprefix $(objdir)/,$(skip_SRCS:.c=.o))
 
 clean: mostlyclean
 	$(RM) $(all_PACKAGES) y.tab.c y.tab.h

@@ -124,10 +124,13 @@ static buffer_t *readfile(FILE *restrict f, char *restrict name)
 	}
 
 	ret->used = pos;
-
+	free(name);
+	name = NULL;
 	return ret;
 
 fail:
+	free(name);
+	name = NULL;
 	for(ssize_t i = 0; ret->lines && i < ret->num; ret->lines++) 
 	{
 		if(ret->lines[i]) {
@@ -575,11 +578,10 @@ static void print_loc(void)
 
 int main(const int argc, const char *restrict argv[])
 {
-	int ch = 0;
 	const char *name;
 
-	FILE *f = fopen((name = argv[1] ? argv[1] : "/etc/passwd"), "r");
-	cur_buffer = readfile(f, name);
+	FILE *f = fopen((name = (argc>1) ? argv[1] : "/etc/passwd"), "r");
+	cur_buffer = readfile(f, strdup(name));
 	if (!cur_buffer)
 		errx(1, "unable to read file");
 
@@ -595,6 +597,7 @@ int main(const int argc, const char *restrict argv[])
 	move(curs_y,curs_x);
 	refresh();
 
+	int ch = 0;
 	goto first;
 
 	while (1)

@@ -1,4 +1,9 @@
+/* vi.c - a partial implementation of POSIX.1-2017
+ * Copyright © 2019 Ian Kirk. All rights reserved. */
+
 #define _XOPEN_SOURCE 700
+
+/* preprocessor includes */
 
 #include <stdio.h>
 #include <signal.h>
@@ -13,11 +18,15 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 
+/* preprocessor defines */
+
 #define	KEY_ESC	033
 #define KEY_HT	'\t'
 #define	KEY_CR	'\r'
 
 #define CTRLCODE(x) ((x)&31)
+
+/* enum, structure, union and type definitions */
 
 typedef struct {
 	char	*line;
@@ -35,25 +44,32 @@ typedef struct {
 
 enum edit_mode_en { EM_NULL=0, EM_CMD, EM_EDIT, EM_LINE };
 
-static buffer_t *cur_buffer = NULL;
-static line_t *cur_line = NULL;
-static ssize_t scr_width = 80, scr_height = 25;
-static ssize_t max_scr_x, max_scr_y;
-static ssize_t file_y = 0, file_x = 0;
-static ssize_t curs_x = 0, curs_y = 0;
-static int tabstop = 8;
-static enum edit_mode_en edit_mode = EM_EDIT;
-static enum edit_mode_en prev_mode = EM_NULL;
-static char edit_line_buf[BUFSIZ]	= {0};
-static char *edit_line_ptr			= NULL;
-static int (*cmd_handler)(const int *);
-static bool push_next = false;
-static bool push_digit = false;
-static int cmd_ch_buf[BUFSIZ];
-static int *cmd_ptr = cmd_ch_buf;
-static int cmd_repeat = 1;
+/* local variables */
 
+static   char        edit_line_buf[BUFSIZ];
+static   int         cmd_ch_buf[BUFSIZ];
+static   ssize_t     max_scr_x;
+static   ssize_t     max_scr_y;
+static   buffer_t   *cur_buffer    = NULL;
+static   line_t     *cur_line      = NULL;
+static   ssize_t     scr_width     = 80;
+static   ssize_t     scr_height    = 25;
+static   ssize_t     file_y        = 0;
+static   ssize_t     file_x        = 0;
+static   ssize_t     curs_x        = 0;
+static   ssize_t     curs_y        = 0;
+static   int         tabstop       = 8;
+static   char       *edit_line_ptr = NULL;
+static   bool        push_next     = false;
+static   bool        push_digit    = false;
+static   int        *cmd_ptr       = cmd_ch_buf;
+static   int         cmd_repeat    = 1;
 
+static int (*cmd_handler)(const int *) = NULL;
+static enum edit_mode_en edit_mode     = EM_EDIT;
+static enum edit_mode_en prev_mode     = EM_NULL;
+
+/* local function definitions */
 
 inline static ssize_t min(const ssize_t a, const ssize_t b)
 {
@@ -117,10 +133,8 @@ static void init(void)
 {
 	signal(SIGINT, done);
 	signal(SIGQUIT, done);
-	//signal(SIGILL, done);
 	signal(SIGKILL, done);
 	signal(SIGTERM, done);
-	//signal(SIGSEGV, done);
 
 	setvbuf(stderr, NULL, _IONBF, 0);
 
@@ -279,20 +293,19 @@ static ssize_t compute_linex(void)
 	}
 }
 
-
 static void clampx(void)
 {
 	if (compute_linex() > (cur_line->used-1)) 
 		curs_x-=(compute_linex()) - (cur_line->used-1);
-	if (curs_x < 0) { 
+	
+    if (curs_x < 0) { 
 		file_x += curs_x; 
 		curs_x = 0; 
 	} else if (curs_x > max_scr_x) { 
 		file_x += curs_x - max_scr_x; 
 		curs_x = max_scr_x; 
 	}
-	//if (file_x > ((cur_line->used-1) - (scr_width-1))) 
-	//file_x = (cur_line->used-1) - (scr_width-1);
+
 	if (file_x < 0) 
 		file_x = 0;
 }
@@ -349,23 +362,13 @@ static void move_to_col(size_t tgt)
 	wmove(stdscr, curs_y, curs_x);
 }
 
-
 static void move_left(void)
 {
 	const ssize_t actx = compute_linex();
 	if (actx == 0) 
 		return;
-	move_to_col(actx-1);
-	/*
-	const ssize_t oldx = compute_offsetx(actx);
-	const ssize_t newx = compute_offsetx(actx-1);
 
-	curs_x -= (oldx-newx);
-
-	clampx();
-
-	wmove(stdscr, curs_y, curs_x);
-	*/
+	move_to_col(actx - 1);
 }
 
 static void move_right(void)
@@ -373,18 +376,8 @@ static void move_right(void)
 	const ssize_t actx = compute_linex();
 	if (actx == (cur_line->used-1)) 
 		return;
-	move_to_col(actx+1);
 
-	/*
-	const ssize_t oldx = compute_offsetx(actx);
-	const ssize_t newx = compute_offsetx(actx+1);
-
-	curs_x += (newx-oldx);
-
-	clampx();
-
-	wmove(stdscr, curs_y, curs_x);
-	*/
+	move_to_col(actx + 1);
 }
 
 static void insert_line(const bool shift, line_t *newline)
@@ -431,7 +424,6 @@ static void insert_line(const bool shift, line_t *newline)
 static void delete_line(const ssize_t line)
 {
 	if (line < 0 || line > cur_buffer->used-1) return;
-	//ssize_t line = curs_y + file_y; // FIXME write func
 	line_t *nl = cur_buffer->lines[line];
 
 	if (nl->line) free(nl->line);
@@ -449,7 +441,7 @@ static void delete_line(const ssize_t line)
 
 static void delete_char(const int pos)
 {
-	const ssize_t point = compute_linex()+pos;
+	const ssize_t point = compute_linex() + pos;
 	const ssize_t line = curs_y + file_y; //FIXME write func
 
 	if (point < 0) {
@@ -473,7 +465,6 @@ static void delete_char(const int pos)
 			prv->line[prv->used]='\0';
 			strcpy(merged, prv->line);
 			strcat(merged, cur->line);
-			//snprintf(merged, len, "%s%s", prv->line, cur->line);
 			free(prv->line);
 			prv->line = merged;
 			prv->used = len - 1;
@@ -657,7 +648,7 @@ static void push_cmd_ch(const int ch)
 	}
 
 	*cmd_ptr++ = ch;
-	*cmd_ptr = '\0';
+	*cmd_ptr   = '\0';
 }
 
 static void process_cmd_ch(const int ch)
@@ -681,24 +672,20 @@ static void process_cmd_ch(const int ch)
 		{
 			case 'j':
 			case KEY_DOWN:
-				while(cmd_repeat-- > 0)
-					move_down();
+				while(cmd_repeat-- > 0) move_down();
 				break;
 			case 'k':
 			case KEY_UP:
-				while(cmd_repeat-- > 0)
-					move_up();
+				while(cmd_repeat-- > 0) move_up();
 				break;
 			case 'h':
 			case KEY_BACKSPACE:
 			case KEY_LEFT:
-				while(cmd_repeat-- > 0)
-					move_left();
+				while(cmd_repeat-- > 0) move_left();
 				break;
 			case 'l':
 			case KEY_RIGHT:
-				while(cmd_repeat-- > 0)
-					move_right();
+				while(cmd_repeat-- > 0) move_right();
 				break;
 			case 'a':
 				move_right();
@@ -715,14 +702,10 @@ static void process_cmd_ch(const int ch)
 				break;
 			case KEY_DL:
 			case 'x':
-				while(cmd_repeat-- > 0)
-					delete_char(0);
+				while(cmd_repeat-- > 0) delete_char(0);
 				break;
 			case 'G':
 				move_to_line(cur_buffer->used-1);
-				//curs_y = min(max_scr_y, cur_buffer->used - 1);
-				//file_y = max(0, cur_buffer->used - curs_y - 1);
-				//move_down();
 				break;
 			case ':':
 				prev_mode = EM_CMD;
@@ -819,6 +802,8 @@ static int process_esc_sequence(const int *restrict buf)
 {
 	return ERR;
 }
+
+/* global function definitions */
 
 int main(const int argc, const char *restrict argv[])
 {

@@ -53,7 +53,7 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-all: $(all_PACKAGES) $(objdir)/.d $(objdir)/bin/sh
+all: $(all_PACKAGES) $(objdir)/.d $(objdir)/bin/sh $(objdir)/bin/vi
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
@@ -63,6 +63,9 @@ $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 
 $(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/y.tab.o
 	$(CC) $(LDFLAGS) $^ -o $@
+
+$(objdir)/bin/vi: $(objdir)/vi.o
+	$(CC) $(LDFLAGS) $< -lncurses -o $@
 
 $(objdir)/sh.o:	$(objdir)/y.tab.h $(objdir)/y.tab.c
 

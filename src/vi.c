@@ -46,6 +46,14 @@ static enum edit_mode_en edit_mode = EM_EDIT;
 static enum edit_mode_en prev_mode = EM_NULL;
 static char edit_line_buf[BUFSIZ]	= {0};
 static char *edit_line_ptr			= NULL;
+static int (*cmd_handler)(const int *);
+static bool push_next = false;
+static bool push_digit = false;
+static int cmd_ch_buf[BUFSIZ];
+static int *cmd_ptr = cmd_ch_buf;
+static int cmd_repeat = 1;
+
+
 
 inline static ssize_t min(const ssize_t a, const ssize_t b)
 {
@@ -55,6 +63,12 @@ inline static ssize_t min(const ssize_t a, const ssize_t b)
 inline static ssize_t max(const ssize_t a, const ssize_t b)
 {
 	return (a > b) ? (a) : (b);
+}
+
+inline static bool isnumber(const char *restrict str)
+{
+	while(*str) if(!isdigit(*str++)) return false;
+	return true;
 }
 
 static void clean(void)
@@ -71,14 +85,17 @@ static void clean(void)
 	done = true;
 }
 
-static void done(int sig)
+static void done(const int sig)
 {
 	clean();
 	errx(EXIT_FAILURE, "exiting with signal %d", sig);
 }
 
-static void resize(int sig)
+static void resize(const int sig)
 {
+	if (sig != SIGWINCH)
+		warnx("Non-SIGWINCH passed to resize");
+
 	struct winsize size;
 	if (ioctl(0, TIOCGWINSZ, (char *)&size) == -1)
 		err(1, "ioctl: TIOCGWINSZ");
@@ -94,18 +111,16 @@ static void resize(int sig)
 	curs_x = min(max_scr_x, curs_x);
 	curs_y = min(max_scr_y, curs_y);
 	cur_line = cur_buffer->lines[file_y + curs_y];
-
-	warnx("resizing to %lu x %lu\n", scr_width, scr_height);
 }
 
 static void init(void)
 {
 	signal(SIGINT, done);
 	signal(SIGQUIT, done);
-	signal(SIGILL, done);
+	//signal(SIGILL, done);
 	signal(SIGKILL, done);
 	signal(SIGTERM, done);
-	signal(SIGSEGV, done);
+	//signal(SIGSEGV, done);
 
 	setvbuf(stderr, NULL, _IONBF, 0);
 
@@ -201,6 +216,7 @@ warnfail:
 	warn("readfile");
 	goto fail;
 }
+
 inline static int next_tab(const ssize_t offset_x)
 {
 	if ( (offset_x+1) % tabstop == 0)
@@ -281,28 +297,24 @@ static void clampx(void)
 		file_x = 0;
 }
 
-static void move_up(void)
+static void move_to_line(size_t tgt)
 {
-	if (curs_y == 0 && file_y > 0) 
-		file_y--;
-	else if (curs_y > 0) 
-		curs_y--;
-
-	cur_line = cur_buffer->lines[file_y + curs_y];
+	cur_line = cur_buffer->lines[tgt = max(0, min(tgt, cur_buffer->used - 1))];
+	curs_y += tgt - (curs_y + file_y);
+	curs_y = max(0, min(curs_y, max_scr_y));
+	file_y = max(0, tgt - curs_y);
 	clampx();
 	wmove(stdscr, curs_y, curs_x);
 }
 
-static void move_down(void)
+inline static void move_up(void)
 {
-	if (curs_y == max_scr_y && (file_y + max_scr_y < cur_buffer->used-1)) 
-		file_y++;
-	else if ((curs_y < max_scr_y) && (curs_y + file_y < cur_buffer->used-1))
-		curs_y++;
+	move_to_line(curs_y + file_y - 1);
+}
 
-	cur_line = cur_buffer->lines[min(file_y + curs_y, cur_buffer->used - 1)];
-	clampx();
-	wmove(stdscr, curs_y, curs_x);
+inline static void move_down(void)
+{
+	move_to_line(curs_y + file_y + 1);
 }
 
 /* convert a character offset in a string to an absolute screen offset */
@@ -323,12 +335,28 @@ static ssize_t compute_offsetx(const ssize_t pos)
 	}
 }
 
+static void move_to_col(size_t tgt)
+{
+	tgt = max(0, min(tgt, cur_line->used - 1));
+
+	const ssize_t actx = compute_linex();
+	const ssize_t oldx = compute_offsetx(actx);
+	const ssize_t newx = compute_offsetx(tgt);
+
+	curs_x += (newx - oldx);
+	clampx();
+
+	wmove(stdscr, curs_y, curs_x);
+}
+
+
 static void move_left(void)
 {
 	const ssize_t actx = compute_linex();
 	if (actx == 0) 
 		return;
-
+	move_to_col(actx-1);
+	/*
 	const ssize_t oldx = compute_offsetx(actx);
 	const ssize_t newx = compute_offsetx(actx-1);
 
@@ -337,6 +365,7 @@ static void move_left(void)
 	clampx();
 
 	wmove(stdscr, curs_y, curs_x);
+	*/
 }
 
 static void move_right(void)
@@ -344,7 +373,9 @@ static void move_right(void)
 	const ssize_t actx = compute_linex();
 	if (actx == (cur_line->used-1)) 
 		return;
+	move_to_col(actx+1);
 
+	/*
 	const ssize_t oldx = compute_offsetx(actx);
 	const ssize_t newx = compute_offsetx(actx+1);
 
@@ -353,6 +384,7 @@ static void move_right(void)
 	clampx();
 
 	wmove(stdscr, curs_y, curs_x);
+	*/
 }
 
 static void insert_line(const bool shift, line_t *newline)
@@ -396,9 +428,10 @@ static void insert_line(const bool shift, line_t *newline)
 	move_down();
 }
 
-static void delete_line(void)
+static void delete_line(const ssize_t line)
 {
-	ssize_t line = curs_y + file_y; // FIXME write func
+	if (line < 0 || line > cur_buffer->used-1) return;
+	//ssize_t line = curs_y + file_y; // FIXME write func
 	line_t *nl = cur_buffer->lines[line];
 
 	if (nl->line) free(nl->line);
@@ -422,7 +455,7 @@ static void delete_char(const int pos)
 	if (point < 0) {
 		if (cur_line->used <= 2) {
 			cur_buffer->modified = true;
-			delete_line();
+			delete_line(line);
 		} else if (line > 0) {
 			cur_buffer->modified = true;
 			char *merged = NULL;
@@ -445,7 +478,7 @@ static void delete_char(const int pos)
 			prv->line = merged;
 			prv->used = len - 1;
 			prv->size = len;
-			delete_line();
+			delete_line(line);
 
 			while(old--) 
 				move_right();
@@ -516,9 +549,26 @@ static void insert_char(const char c)
 	move_right();
 }
 
-static int execute_cmd(const char *str)
+static int execute_line_cmd(const char *str)
 {
-	if (strncmp(str, "c", 1))
+	if (!str || !*str)
+		return 1;
+
+	if (isnumber(str))
+		move_to_line(strtoull(str, NULL, 10));
+	else if (isdigit(*str)) {
+		const char *tmp = str;
+		for(; *tmp && isdigit(*tmp); tmp++) ;
+		
+		char *cntstr = strndup(str, tmp-str);
+		int rc = 0; 
+		size_t limit = strtoull(cntstr, NULL, 10);
+
+		while(limit--)
+			rc += execute_line_cmd(tmp);
+		free(cntstr);
+		return rc ? 1 :0;
+	} else if (!strncmp(str, "q", 1))
 		exit(0);
 	return 0;
 }
@@ -531,7 +581,7 @@ static void process_line_ch(const int ch)
 			edit_mode = prev_mode;
 			break;
 		case KEY_CR:
-			if (execute_cmd(edit_line_buf)) {
+			if (execute_line_cmd(edit_line_buf)) {
 				beep();
 				// handle error
 			} else {
@@ -544,75 +594,165 @@ static void process_line_ch(const int ch)
 	}
 }
 
-static void process_cmd_ch(const int ch)
+static void stop_cmd(void)
+{
+	push_next = false;
+	push_digit = false;
+	memset(cmd_ch_buf, 0, sizeof(cmd_ch_buf));
+	cmd_ptr = cmd_ch_buf;
+	cmd_repeat = 1;
+}
+
+static int handler_d(const int *ch)
+{
+	if (ch[1] == 0) 
+		return 0;
+
+	switch(ch[1])
+	{
+		case KEY_UP:
+			while(cmd_repeat-- > 0)
+				delete_line(file_y + curs_y - 1);
+			break;
+		case KEY_DOWN:
+			while(cmd_repeat-- > 0) {
+				delete_line(file_y + curs_y + 1);
+				move_down();
+			}
+			break;
+		case 'd':
+			while(cmd_repeat-- > 0) {
+				delete_line(file_y + curs_y); // FIXME write get_cur_line();
+				if(file_y + curs_y > 0)
+					move_down();
+			}
+			break;
+		default:
+			stop_cmd();
+			return -1;
+	}
+	stop_cmd();
+	return 1;
+}
+
+static int (*lookup_cmd_func(const int ch))(const int *)
 {
 	switch(ch)
 	{
-		case 'j':
-		case KEY_DOWN:
-			move_down();
-			break;
-		case 'k':
-		case KEY_UP:
-			move_up();
-			break;
-		case 'h':
-		case KEY_BACKSPACE:
-		case KEY_LEFT:
-			move_left();
-			break;
-		case 'l':
-		case KEY_RIGHT:
-			move_right();
-			break;
-		case 'a':
-			move_right();
-			goto insert_mode;
-		case '^':
-		case KEY_HOME:
-			curs_x = 0;
-			file_x = 0;
-			clampx();
-			break;
-		case '$':
-		case KEY_END:
-		case 'A':
-			curs_x = cur_line ? cur_line->used : curs_x;
-			clampx();
-			if (ch == 'A') goto insert_mode;
-			break;
-		case KEY_DL:
-		case 'x':
-			delete_char(0);
-			break;
-		case 'G':
-			curs_y = max_scr_y;
-			file_y = max(0, cur_buffer->used - max_scr_y - 1);
-			move_down();
-			break;
-		case ':':
-			prev_mode = EM_CMD;
-			edit_mode = EM_LINE;
-			memset(edit_line_buf, 0, sizeof(edit_line_buf));
-			edit_line_ptr = edit_line_buf;
-			break;
-		case 'i':
-insert_mode:
-			prev_mode = EM_CMD;
-			edit_mode = EM_EDIT;
-			break;
-		case CTRLCODE('C'):
-			exit(EXIT_SUCCESS);
+		case 'd':
+			return handler_d;
 			break;
 		default:
-			wmove(stdscr, max_scr_y+1, 0);
-			wclrtoeol(stdscr);
-			mvwprintw(stdscr, max_scr_y+1, 0, 
-					"Error: %c: unknown command", ch);
-			wrefresh(stdscr);
-			beep();
-			sleep(2);
-			break;
+			return NULL;
+	}
+}
+
+static void push_cmd_ch(const int ch)
+{
+	if (ch == CTRLCODE(ch)) {
+		push_next = false;
+		cmd_ptr = cmd_ch_buf;
+		*cmd_ptr = '\0';
+		return;
+	}
+
+	*cmd_ptr++ = ch;
+	*cmd_ptr = '\0';
+}
+
+static void process_cmd_ch(const int ch)
+{
+	if (push_next) {
+		push_cmd_ch(ch);
+		cmd_handler(cmd_ch_buf);
+	} else if(ch < 0xff && isdigit(ch) && push_digit) {
+		cmd_repeat *= 10;
+		cmd_repeat += (ch - '0');
+	} else if(ch < 0xff && isdigit(ch) && (cmd_ptr == cmd_ch_buf)) {
+		cmd_repeat = (ch - '0');
+		push_digit = true;
+	} else {
+		push_digit = false;
+
+		if (cmd_repeat <= 0)
+			cmd_repeat = 1;
+
+		switch(ch)
+		{
+			case 'j':
+			case KEY_DOWN:
+				while(cmd_repeat-- > 0)
+					move_down();
+				break;
+			case 'k':
+			case KEY_UP:
+				while(cmd_repeat-- > 0)
+					move_up();
+				break;
+			case 'h':
+			case KEY_BACKSPACE:
+			case KEY_LEFT:
+				while(cmd_repeat-- > 0)
+					move_left();
+				break;
+			case 'l':
+			case KEY_RIGHT:
+				while(cmd_repeat-- > 0)
+					move_right();
+				break;
+			case 'a':
+				move_right();
+				goto insert_mode;
+			case '^':
+			case KEY_HOME:
+				move_to_col(0);
+				break;
+			case '$':
+			case KEY_END:
+			case 'A':
+				move_to_col(cur_line->used-1);
+				if (ch == 'A') goto insert_mode;
+				break;
+			case KEY_DL:
+			case 'x':
+				while(cmd_repeat-- > 0)
+					delete_char(0);
+				break;
+			case 'G':
+				move_to_line(cur_buffer->used-1);
+				//curs_y = min(max_scr_y, cur_buffer->used - 1);
+				//file_y = max(0, cur_buffer->used - curs_y - 1);
+				//move_down();
+				break;
+			case ':':
+				prev_mode = EM_CMD;
+				edit_mode = EM_LINE;
+				memset(edit_line_buf, 0, sizeof(edit_line_buf));
+				edit_line_ptr = edit_line_buf;
+				break;
+			case 'i':
+insert_mode:
+				prev_mode = EM_CMD;
+				edit_mode = EM_EDIT;
+				break;
+			case CTRLCODE('C'):
+				exit(EXIT_SUCCESS);
+				break;
+			case 'd':
+				push_cmd_ch(ch);
+				cmd_handler = lookup_cmd_func(ch);
+				push_next = true;
+				break;
+			default:
+				wmove(stdscr, max_scr_y+1, 0);
+				wclrtoeol(stdscr);
+				mvwprintw(stdscr, max_scr_y+1, 0, 
+						"Error: %c: unknown command", ch);
+				wrefresh(stdscr);
+				beep();
+				sleep(2);
+				break;
+		}
 	}
 }
 
@@ -665,6 +805,7 @@ static void process_edit_ch(const int ch)
 			break;
 		case KEY_ESC:
 			edit_mode = EM_CMD;
+			stop_cmd();
 			break;
 		case CTRLCODE('C'):
 			exit(EXIT_SUCCESS);
@@ -765,6 +906,17 @@ int main(const int argc, const char *restrict argv[])
 						cur_buffer->name,
 						cur_buffer->modified ? " [+]" : "",
 						cur_buffer->used);
+					wmove(stdscr, max_scr_y+1, 30);
+					if (push_digit || cmd_repeat>1)
+						wprintw(stdscr, "%ld", cmd_repeat);
+					if (push_next) {
+						int *tmp = cmd_ch_buf;
+						while(*tmp) {
+							if (isprint(*tmp) && *tmp != '\n') 
+								waddch(stdscr, *tmp);
+						tmp++;
+					}
+				}
 				print_loc();
 				break;
 			case EM_EDIT:

@@ -7,6 +7,9 @@ lib64
 *.swp
 src2
 y.tab.*
+*.a
+*.la
+src/libc/.libs
 usr
 proc
 sys

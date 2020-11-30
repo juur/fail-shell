@@ -19,6 +19,7 @@ CAT				:= cat
 TAR				:= tar
 YACC			:= byacc
 Y_FLAGS			:= -d -t
+L_FLAGS			:=
 PKGCONFIG		:= pkg-config
 INSTALL			:= install -c
 INSTALL_PROGRAM	:= $(INSTALL)
@@ -28,7 +29,7 @@ HELP2MAN		:= help2man
 DEPS			:= 1
 PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
-skip_SRCS		:= vi.c sh.c sh_old.c
+skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c awk.c
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share
@@ -55,7 +56,8 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-all: $(all_PACKAGES) $(objdir)/.d $(objdir)/bin/sh $(objdir)/bin/vi
+# $(objdir)/bin/awk
+all: $(objdir)/.d $(all_PACKAGES) $(objdir)/bin/sh $(objdir)/bin/vi $(objdir)/bin/make
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
@@ -63,16 +65,50 @@ $(objdir)/.d:
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@
 
+
 $(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/sh.y.tab.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 $(objdir)/bin/vi: $(objdir)/vi.o
 	$(CC) $(LDFLAGS) $< -lncurses -o $@
 
-$(objdir)/sh.o:	$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c
+$(objdir)/bin/awk: $(objdir)/awk.o $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(objdir)/bin/make: $(objdir)/make.o $(objdir)/make.y.tab.o $(objdir)/make.grammar.yy.o
+	$(CC) $(LDFLAGS) $^ -o $@
+
+
+$(objdir)/sh.o:	$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c $(srcdir)/src/sh.c $(srcdir)/src/sh.h
+
+$(objdir)/awk.o: $(objdir)/awk.y.tab.h $(objdir)/awk.y.tab.c $(srcdir)/src/awk.c
+
+$(objdir)/make.o: $(objdir)/make.y.tab.h $(objdir)/make.y.tab.c $(srcdir)/src/make.c
+
 
 $(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c:	$(srcdir)/src/sh.y $(srcdir)/src/sh.h
 	$(YACC) $(Y_FLAGS) -b sh.y -o $@ $<
+
+
+$(objdir)/make.grammar.yy.o: $(objdir)/make.grammar.yy.c
+	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
+
+$(objdir)/make.grammar.yy.c: $(srcdir)/src/make.l $(srcdir)/src/make.h
+	$(LEX) $(L_FLAGS) -o $@ $<
+
+$(objdir)/make.y.tab.h $(objdir)/make.y.tab.c:	$(srcdir)/src/make.y $(srcdir)/src/make.h
+	$(YACC) $(Y_FLAGS) -b make.y -o $@ $<
+
+
+$(objdir)/awk.grammar.yy.o: $(objdir)/awk.grammar.yy.c
+	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
+
+$(objdir)/awk.grammar.yy.c: $(srcdir)/src/awk.l $(srcdir)/src/awk.h
+	$(LEX) $(L_FLAGS) -o $@ $<
+
+$(objdir)/awk.y.tab.h $(objdir)/awk.y.tab.c:	$(srcdir)/src/awk.y $(srcdir)/src/awk.h
+	$(YACC) $(Y_FLAGS) -b awk.y -o $@ $<
+
 
 .PHONY: install uninstall
 
@@ -84,15 +120,15 @@ uninstall:
 .PHONY: mostly-clean clean distclean maintainer-clean
 
 mostlyclean:
-	$(RM) $(package_OBJS) y.tab.o $(addprefix $(objdir)/,$(skip_SRCS:.c=.o))
+	$(RM) $(package_OBJS) $(objdir)/*.yy.o $(objdir)/*.tab.o $(addprefix $(objdir)/,$(skip_SRCS:.c=.o))
 
 clean: mostlyclean
-	$(RM) $(all_PACKAGES) $(objdir)/y.tab.c $(objdir)/y.tab.h $(objdir)/.d/*.d
+	$(RM) $(all_PACKAGES) $(objdir)/bin/{make,sh,vi} $(objdir)/*.yy.c $(objdir)/*.tab.c $(objdir)/*.tab.h $(objdir)/.d/*.d
 
 distclean: clean
 	$(RM) config.log
 	$(RM) $(objdir)/config.h{,~}
-	$(RM) $(objdir)/.d
+	$(RM) -r $(objdir)/.d
 
 maintainer-clean: distclean
 	$(RM) $(PACKAGE)-$(VERSION).tar.xz

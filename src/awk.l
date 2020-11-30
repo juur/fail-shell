@@ -7,7 +7,7 @@ IS	(u|U|l|L)*
 
 %{
 #define _XOPEN_SOURCE 700
-#include "y.tab.h"
+#include "awk.y.tab.h"
 #include "awk.h"
 #include <stdio.h>
 

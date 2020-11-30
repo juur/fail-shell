@@ -1,18 +1,20 @@
 SHELL := /bin/sh
 
 srcdir := .
-objdir := /home/build/opt
+objdir := obj
 
 .SUFFIXES:
 .SUFFIXES: .c .o
 
 DESTDIR			:=
-CC				:= /home/build/opt/host/bin/tcc
+# /home/build/opt/host/bin/tcc
+CC				:= gcc
 CXX				:=
-CFLAGS			:= -Wpedantic -Wall -Wextra -std=c99 -g -O
+CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O
 CPPFLAGS		:= -I$(srcdir) -I$(objdir)
-LDFLAGS			:= -static -g
-NCURSES_LD		:= /home/build/opt/lib64/libncurses.a
+LDFLAGS			:=
+# /home/build/opt/lib64/libncurses.a
+NCURSES_LD		:= 
 CAT				:= cat
 TAR				:= tar
 YACC			:= byacc
@@ -23,8 +25,8 @@ INSTALL_PROGRAM	:= $(INSTALL)
 INSTALL_DATA	:= $(INSTALL) -m 644
 HELP2MAN		:= help2man
 # tcc does not support dependencies
-DEPS			:= 0
-PACKAGE			:= zero-shell
+DEPS			:= 1
+PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
 skip_SRCS		:= vi.c sh.c sh_old.c
 
@@ -61,16 +63,16 @@ $(objdir)/.d:
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@
 
-$(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/y.tab.o
+$(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/sh.y.tab.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 $(objdir)/bin/vi: $(objdir)/vi.o
 	$(CC) $(LDFLAGS) $< -lncurses -o $@
 
-$(objdir)/sh.o:	$(objdir)/y.tab.h $(objdir)/y.tab.c
+$(objdir)/sh.o:	$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c
 
-$(objdir)/y.tab.h $(objdir)/y.tab.c:	$(srcdir)/src/grammar.y $(srcdir)/src/sh.h
-	$(YACC) $(Y_FLAGS) $<
+$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c:	$(srcdir)/src/sh.y $(srcdir)/src/sh.h
+	$(YACC) $(Y_FLAGS) -b sh.y -o $@ $<
 
 .PHONY: install uninstall
 
@@ -85,7 +87,7 @@ mostlyclean:
 	$(RM) $(package_OBJS) y.tab.o $(addprefix $(objdir)/,$(skip_SRCS:.c=.o))
 
 clean: mostlyclean
-	$(RM) $(all_PACKAGES) y.tab.c y.tab.h
+	$(RM) $(all_PACKAGES) $(objdir)/y.tab.c $(objdir)/y.tab.h $(objdir)/.d/*.d
 
 distclean: clean
 	$(RM) config.log

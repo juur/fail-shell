@@ -15,7 +15,7 @@
 #include <libgen.h>
 
 #include "sh.h"
-#include "y.tab.h"
+#include "sh.y.tab.h"
 
 /* preprocessor defines */
 

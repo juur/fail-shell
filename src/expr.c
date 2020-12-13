@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "y.tab.h"
+#include "expr.y.tab.h"
 
 static int current_arg;
 static char **args;

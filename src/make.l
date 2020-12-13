@@ -7,8 +7,8 @@ EOL		[\r\n]+
 #define _XOPEN_SOURCE 700
 #include <stdio.h>
 
-#include "make.y.tab.h"
 #include "make.h"
+#include "make.y.tab.h"
 
 %}
 

@@ -12,7 +12,7 @@ CC				:= gcc
 CXX				:=
 CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O
 CPPFLAGS		:= -I$(srcdir) -I$(objdir)
-LDFLAGS			:=
+LDFLAGS			:= -lncurses
 # /home/build/opt/lib64/libncurses.a
 NCURSES_LD		:= 
 CAT				:= cat
@@ -29,7 +29,8 @@ HELP2MAN		:= help2man
 DEPS			:= 1
 PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
-skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c awk.c
+skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
+broken_SRCS		:= awk.c
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share
@@ -44,10 +45,13 @@ libdir      := $(prefix)/lib
 mandir      := $(datarootdir)/man
 localedir   := $(datarootdir)/locale
 
-all_SRCS		:= $(filter-out $(skip_SRCS), $(notdir $(wildcard $(srcdir)/src/*.c)))
-all_HEADERS		:= $(notdir $(wildcard $(srcdir)/src/*.h))
-all_PACKAGES	:= $(addprefix $(objdir)/bin/,$(all_SRCS:.c=))
-package_OBJS	:= $(addprefix $(objdir)/,$(filter-out sh.o,$(all_SRCS:.c=.o)))
+all_SRCS			 := $(filter-out $(skip_SRCS), $(notdir $(wildcard $(srcdir)/src/*.c)))
+all_SRCS			 := $(filter-out $(broken_SRCS), $(all_SRCS))
+all_HEADERS			 := $(notdir $(wildcard $(srcdir)/src/*.h))
+all_PACKAGES		 := $(addprefix $(objdir)/bin/,$(all_SRCS:.c=)) 
+all_SPECIAL_PACKAGES := $(addprefix $(objdir)/bin/,$(skip_SRCS:.c=))
+package_OBJS		 := $(addprefix $(objdir)/,$(all_SRCS:.c=.o))
+skip_OBJS			 := $(addprefix $(objdir)/,$(skip_OBJS:.c=.o))
 
 ifeq ($(DEPS),1)
 CPPFLAGS += -MMD -MP
@@ -56,8 +60,9 @@ CPPFLAGS += -I$(srcdir)/src
 
 
 .PHONY: all
-# $(objdir)/bin/awk
-all: $(objdir)/.d $(all_PACKAGES) $(objdir)/bin/sh $(objdir)/bin/vi $(objdir)/bin/make
+
+all: $(objdir)/.d $(all_PACKAGES) $(all_SPECIAL_PACKAGES)
+
 
 $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
@@ -66,48 +71,34 @@ $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $(LDFLAGS) $< -o $@
 
 
-$(objdir)/bin/sh: $(objdir)/sh.o $(objdir)/sh.y.tab.o
-	$(CC) $(LDFLAGS) $^ -o $@
 
 $(objdir)/bin/vi: $(objdir)/vi.o
 	$(CC) $(LDFLAGS) $< -lncurses -o $@
 
-$(objdir)/bin/awk: $(objdir)/awk.o $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o
+$(objdir)/bin/awk: $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o $(objdir)/awk.o  
 	$(CC) $(LDFLAGS) $^ -o $@
 
-$(objdir)/bin/make: $(objdir)/make.o $(objdir)/make.y.tab.o $(objdir)/make.grammar.yy.o
+$(objdir)/bin/make: $(objdir)/make.y.tab.o $(objdir)/make.grammar.yy.o $(objdir)/make.o 
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(objdir)/bin/sh: $(objdir)/sh.y.tab.o $(objdir)/sh.o
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 
-$(objdir)/sh.o:	$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c $(srcdir)/src/sh.c $(srcdir)/src/sh.h
 
-$(objdir)/awk.o: $(objdir)/awk.y.tab.h $(objdir)/awk.y.tab.c $(srcdir)/src/awk.c
+$(objdir)/%.grammar.yy.o: $(objdir)/%.grammar.yy.c
 
-$(objdir)/make.o: $(objdir)/make.y.tab.h $(objdir)/make.y.tab.c $(srcdir)/src/make.c
-
-
-$(objdir)/sh.y.tab.h $(objdir)/sh.y.tab.c:	$(srcdir)/src/sh.y $(srcdir)/src/sh.h
-	$(YACC) $(Y_FLAGS) -b sh.y -o $@ $<
-
-
-$(objdir)/make.grammar.yy.o: $(objdir)/make.grammar.yy.c
-	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
-
-$(objdir)/make.grammar.yy.c: $(srcdir)/src/make.l $(srcdir)/src/make.h
+$(objdir)/%.grammar.yy.c: $(srcdir)/src/%.l $(srcdir)/src/%.h
 	$(LEX) $(L_FLAGS) -o $@ $<
 
-$(objdir)/make.y.tab.h $(objdir)/make.y.tab.c:	$(srcdir)/src/make.y $(srcdir)/src/make.h
-	$(YACC) $(Y_FLAGS) -b make.y -o $@ $<
 
+$(objdir)/%.y.tab.o: $(objdir)/%.y.tab.c $(objdir)/%.tab.h
 
-$(objdir)/awk.grammar.yy.o: $(objdir)/awk.grammar.yy.c
-	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
-
-$(objdir)/awk.grammar.yy.c: $(srcdir)/src/awk.l $(srcdir)/src/awk.h
-	$(LEX) $(L_FLAGS) -o $@ $<
-
-$(objdir)/awk.y.tab.h $(objdir)/awk.y.tab.c:	$(srcdir)/src/awk.y $(srcdir)/src/awk.h
-	$(YACC) $(Y_FLAGS) -b awk.y -o $@ $<
+$(objdir)/%.y.tab.c $(objdir)/%.y.tab.h: $(srcdir)/src/%.y $(srcdir)/src/%.h
+	$(YACC) $(Y_FLAGS) -b $*.y -o $@ $<
 
 
 .PHONY: install uninstall
@@ -120,10 +111,13 @@ uninstall:
 .PHONY: mostly-clean clean distclean maintainer-clean
 
 mostlyclean:
-	$(RM) $(package_OBJS) $(objdir)/*.yy.o $(objdir)/*.tab.o $(addprefix $(objdir)/,$(skip_SRCS:.c=.o))
+	$(RM) $(package_OBJS) $(skip_OBJS) $(objdir)/*.yy.o $(objdir)/*.tab.o
 
 clean: mostlyclean
-	$(RM) $(all_PACKAGES) $(objdir)/bin/{make,sh,vi} $(objdir)/*.yy.c $(objdir)/*.tab.c $(objdir)/*.tab.h $(objdir)/.d/*.d
+	$(RM) $(all_PACKAGES) $(objdir)/bin/{make,sh,vi} \
+		$(objdir)/*.yy.c $(objdir)/*.tab.c \
+		$(objdir)/*.tab.h $(objdir)/.d/*.d \
+		*.y.tab.h
 
 distclean: clean
 	$(RM) config.log
@@ -135,6 +129,7 @@ maintainer-clean: distclean
 
 
 .PHONY: dist
+
 dist:
 	pushd $(srcdir) >/dev/null ; \
 	$(TAR) -acf $(objdir)/$(PACKAGE)-$(VERSION).tar.xz \
@@ -153,4 +148,5 @@ endif
 
 ifeq ($(DEPS),1)
 -include $(all_SRCS:$(srcdir)/src/%.c=$(objdir)/.d/%.d)
+-include $(skip_SRCS:$(srcdir)/src/%.c=$(objdir)/.d/%.d)
 endif

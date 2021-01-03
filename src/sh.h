@@ -1,8 +1,10 @@
 #ifndef _SH_H
 #define _SH_H 1
 
+#define NDEBUG
+
 #ifdef NDEBUG
-#define debug_printf(...) printf(...)
+#define debug_printf(...) printf(__VA_ARGS__)
 #else
 #define debug_printf(...)
 #endif
@@ -41,6 +43,8 @@ struct _node {
 	char sep;			// & or ;
 	int token;
 };
+
+#include <stdbool.h>
 
 node *nodeAppend(node*, node*);
 node *nIf(node*, node*, node*);			// arg3 = redirect_list

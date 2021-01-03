@@ -10,8 +10,9 @@ DESTDIR			:=
 # /home/build/opt/host/bin/tcc
 CC				:= gcc
 CXX				:=
-CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O
-CPPFLAGS		:= -I$(srcdir) -I$(objdir)
+#CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter
+CFLAGS			:= -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter -Wall
+CPPFLAGS		:= -I$(srcdir) -I$(objdir) -D_XOPEN_SOURCE=700
 LDFLAGS			:= -lncurses
 # /home/build/opt/lib64/libncurses.a
 NCURSES_LD		:= 
@@ -81,7 +82,7 @@ $(objdir)/bin/awk: $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o $(objdir)/aw
 $(objdir)/bin/make: $(objdir)/make.y.tab.o $(objdir)/make.grammar.yy.o $(objdir)/make.o 
 	$(CC) $(LDFLAGS) $^ -o $@
 
-$(objdir)/bin/sh: $(objdir)/sh.y.tab.o $(objdir)/sh.o
+$(objdir)/bin/sh: $(objdir)/sh.y.tab.o $(objdir)/sh.grammar.yy.o $(objdir)/sh.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 $(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
@@ -89,10 +90,10 @@ $(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
 
 
 
-$(objdir)/%.grammar.yy.o: $(objdir)/%.grammar.yy.c
+$(objdir)/%.grammar.yy.o: $(objdir)/%.grammar.yy.c $(objdir)/%.grammar.yy.h
 
-$(objdir)/%.grammar.yy.c: $(srcdir)/src/%.l $(srcdir)/src/%.h
-	$(LEX) $(L_FLAGS) -o $@ $<
+$(objdir)/%.grammar.yy.h $(objdir)/%.grammar.yy.c: $(srcdir)/src/%.l $(srcdir)/src/%.h
+	$(LEX) $(L_FLAGS) --header-file=$(objdir)/$(<F:%.l=%.grammar.yy.h) -o $@ $<
 
 
 $(objdir)/%.y.tab.o: $(objdir)/%.y.tab.c $(objdir)/%.tab.h

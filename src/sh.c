@@ -16,6 +16,7 @@
 
 #include "sh.h"
 #include "sh.y.tab.h"
+#include "sh.grammar.yy.h"
 
 /* preprocessor defines */
 
@@ -132,7 +133,7 @@ static int cmd_exec(int, char *[]);
 static int cmd_umask(int, char *[]);
 static int cmd_read(int, char *[]);
 static int cmd_set(int, char *[]);
-static int cmd_pwd(int, char *[]);
+static int cmd_pwd(/*int, char *[]*/);
 static int cmd_exit(int, char *[]);
 static bool get_next_parser_string(int);
 
@@ -152,10 +153,12 @@ static const struct builtin builtins[] = {
 	{NULL, NULL, 0, 0}
 };
 
+#if 0
 static const map_t word				= { "WORD",				WORD };
 static const map_t io_number		= { "IO_NUMBER",		IO_NUMBER };
 static const map_t assignment_word	= { "ASSIGNMENT_WORD",	ASSIGNMENT_WORD };
 static const map_t name				= { "NAME",				NAME };
+#endif
 
 static const char *reg_assignment_str	= "^[a-zA-Z]([a-zA-Z0-9_]+)?=[^ \t\n]+";    // FIXME doesn't handle A="a a"
 static const char *reg_name_str			= "^[a-zA-Z]([a-zA-Z0-9_]+)?$";
@@ -166,14 +169,17 @@ static const char *pad_str				= "";
 static regex_t reg_assignment;
 static regex_t reg_name;
 
+#if 0
 static const map_t *prev	= NULL;
 static char *left			= NULL;
+#endif
 static int yyline			= 0;
 static int yyrow			= 0;
 
-static char *here_doc_delim		= NULL;
 static char *here_doc_word		= NULL;
 static char *here_doc_remaining = NULL;
+#if 0
+static char *here_doc_delim		= NULL;
 static char *free_me			= NULL;
 static bool here_doc			= false;
 static bool free_left			= false;
@@ -186,6 +192,7 @@ static int  in_brace			= false;
 static bool in_func				= false;
 static int	func_brace			= 0;
 static int	in_if				= 0;
+#endif
 
 static shenv_t *cur_sh_env = NULL;
 static char *parser_string = NULL;
@@ -399,12 +406,12 @@ static int cmd_umask(int argc, char *argv[])
 					opt_symbolic = 1;
 					break;
 				default:
-					warnx(usage);
+					warnx("%s", usage);
 					return EXIT_FAILURE;
 			}
 		}
 		if (argc - optind > 1) {
-			warnx(usage);
+			warnx("%s", usage);
 			return EXIT_FAILURE;
 		}
 		if (argc - optind == 1) {
@@ -429,7 +436,7 @@ static int cmd_umask(int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
-static int cmd_pwd(int argc, char *argv[])
+static int cmd_pwd(/*int argc, char *argv[]*/)
 {
 	char pwd[BUFSIZ];
 	if (getcwd(pwd, BUFSIZ) == NULL)
@@ -698,13 +705,13 @@ static int cmd_exit(const int ac, char *av[])
 }
 
 /* replace the current process with another, effectively implements exec */
-static int cmd_exec(const int ac, char *av[])
+static int cmd_exec(__attribute__((unused)) const int ac, char *av[])
 {
 	warnx("exec: not implemented");
 	return EXIT_FAILURE;
 
 	execvp(av[1], av);
-	warn(av[1]);
+	warn("%s", av[1]);
 	return EXIT_FAILURE;
 }
 
@@ -757,7 +764,7 @@ typedef struct option_map {
 	const char opt;
 } optmap_t;
 
-static const optmap_t optmap[] = {
+__attribute__((unused)) static const optmap_t optmap[] = {
 	{"allexport",	'a'},
 	{"notify",		'b'},
 	{"noclobber",	'C'},
@@ -774,6 +781,7 @@ static const optmap_t optmap[] = {
 
 static int parse_set_option(char *opt)
 {
+	if(!opt) return EXIT_FAILURE;
 	return EXIT_SUCCESS;
 }
 
@@ -1301,6 +1309,7 @@ node *nAssign(char *restrict str)
 {
 	node *ret = newNode(N_ASSIGN);
 	char *tok = strchr(str, '=');
+	if(!tok) return NULL;
 	ret->value = strndup(str, tok - str);
 	ret->arg0 = nString(tok + 1);
 	return ret;
@@ -1436,6 +1445,7 @@ node *nSubshell(node *restrict body)
 	return ret;
 }
 
+#if 0
 static bool isquote(const char chr, const int type)
 {
 	static const char base[]	= "|&;<>()$`\\\"' \t\n";
@@ -1487,6 +1497,7 @@ inline static const map_t *lookup_token(const char *token)
 	}
 	return NULL;
 }
+#endif
 
 static void cleanup()
 {
@@ -1496,6 +1507,7 @@ static void cleanup()
 	if (here_doc_word) free(here_doc_word);
 }
 
+#if 0
 static const map_t *category(const char *token, const char *next, const map_t *restrict prev)
 {
 	size_t len = 0;
@@ -1568,7 +1580,9 @@ static const map_t *category(const char *token, const char *next, const map_t *r
 	}
 	return &word;
 }
+#endif
 
+#if 0
 static char *get_next_token(char *const str, char **next)
 {
 	static char buf[BUFSIZ];
@@ -1700,6 +1714,7 @@ static char *get_next_token(char *const str, char **next)
 
 	return strlen(buf) ? buf : NULL;
 }
+#endif
 
 static void parser_init()
 {
@@ -1742,8 +1757,8 @@ static void parser_init()
 
 /* global function defintions */
 
-
-int yylex()
+#if 0
+int my_yylex()
 {
 	char *old = NULL;
 
@@ -1854,8 +1869,10 @@ again:
 		return ret;
 	}
 }
-
-void yyparse();
+#endif
+void yyparse(void *);
+//int yylex_init(void *);
+//void *yy_scan_string (const char *yy_str, void *yyscanner );
 
 void yyerror(const char *s)
 {
@@ -1880,12 +1897,13 @@ static bool get_next_parser_string(int prompt)
 	return false;
 }
 
-int main(int argc, char *argv[])
+int main(/*int argc, char *argv[]*/)
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stdin, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 	parser_init();
+	void *scanner;
 
 	while(1)
 	{
@@ -1895,7 +1913,12 @@ int main(int argc, char *argv[])
 		if (get_next_parser_string(0))
 			break;
 
-		//printf("parsing '%s'\n", parser_string);
-		yyparse();
+		printf("parsing '%s'\n", parser_string);
+		if(yylex_init(&scanner))
+			exit(EXIT_FAILURE);
+		yyset_debug(1,scanner);
+		yy_scan_string(parser_string, scanner);
+		yyparse(scanner);
+		yylex_destroy(scanner);
 	}
 }

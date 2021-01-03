@@ -594,6 +594,20 @@ static void stop_cmd(void)
 	cmd_repeat = 1;
 }
 
+static int handler_g(const int *ch)
+{
+	if (ch[1] == 0)
+		return 0;
+
+	switch(ch[1])
+	{
+		case 'g': move_to_line(0); break;
+		default: stop_cmd(); return -1;
+	}
+	stop_cmd();
+	return 1;
+}
+
 static int handler_d(const int *ch)
 {
 	if (ch[1] == 0) 
@@ -633,6 +647,9 @@ static int (*lookup_cmd_func(const int ch))(const int *)
 		case 'd':
 			return handler_d;
 			break;
+		case 'g':
+			return handler_g;
+			break;
 		default:
 			return NULL;
 	}
@@ -653,6 +670,8 @@ static void push_cmd_ch(const int ch)
 
 static void process_cmd_ch(const int ch)
 {
+	int tmp = 25;
+
 	if (push_next) {
 		push_cmd_ch(ch);
 		cmd_handler(cmd_ch_buf);
@@ -673,6 +692,12 @@ static void process_cmd_ch(const int ch)
 			case 'j':
 			case KEY_DOWN:
 				while(cmd_repeat-- > 0) move_down();
+				break;
+			case KEY_PPAGE:
+				while(cmd_repeat-- > 0) while(tmp-- > 0) move_up();
+				break;
+			case KEY_NPAGE:
+				while(cmd_repeat-- > 0) while(tmp-- > 0) move_down();
 				break;
 			case 'k':
 			case KEY_UP:
@@ -721,6 +746,7 @@ insert_mode:
 			case CTRLCODE('C'):
 				exit(EXIT_SUCCESS);
 				break;
+			case 'g':
 			case 'd':
 				push_cmd_ch(ch);
 				cmd_handler = lookup_cmd_func(ch);
@@ -757,10 +783,18 @@ static void print_loc(void)
 
 static void process_edit_ch(const int ch)
 {
+	int tmp = 25;
+
 	switch (ch)
 	{
+		case KEY_NPAGE:
+			while(tmp-- > 0) move_down();
+			break;
 		case KEY_DOWN: 
 			move_down();
+			break;
+		case KEY_PPAGE:
+			while(tmp-- > 0) move_up();
 			break;
 		case KEY_UP: 
 			move_up();
@@ -805,7 +839,7 @@ static int process_esc_sequence(const int *restrict buf)
 
 /* global function definitions */
 
-int main(const int argc, const char *restrict argv[])
+int main(const int argc, const char *argv[])
 {
 	const char *name = (argc>1) ? argv[1] : "/etc/passwd";
 

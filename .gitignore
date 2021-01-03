@@ -1,4 +1,5 @@
 *.o
+*.yy.h
 .d
 lib
 *.txt

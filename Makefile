@@ -13,7 +13,7 @@ CXX				:=
 #CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter
 CFLAGS			:= -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter -Wall
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) -D_XOPEN_SOURCE=700
-LDFLAGS			:= -lncurses
+LDFLAGS			:=
 # /home/build/opt/lib64/libncurses.a
 NCURSES_LD		:= 
 CAT				:= cat

@@ -1,6 +1,5 @@
 #define _XOPEN_SOURCE 700
 #include <stdio.h>
-#include <getopt.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <err.h>

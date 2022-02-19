@@ -42,7 +42,7 @@ typedef struct {
 	bool	  modified;
 } buffer_t;
 
-enum edit_mode_en { EM_NULL=0, EM_CMD, EM_EDIT, EM_LINE };
+enum edit_mode_en { EM_NULL=0, EM_CMD, EM_EDIT, EM_LINE, EM_SEARCH };
 
 /* local variables */
 
@@ -564,15 +564,29 @@ static int execute_line_cmd(const char *str)
 	return 0;
 }
 
-static void process_line_ch(const int ch)
+static int execute_search_cmd(const char *str)
 {
+	if (!str || !*str)
+		return 0;
+
+	return 0;
+}
+
+static void process_line_ch(const int ch, int md)
+{
+	int rc = 0;
+
 	switch(ch)
 	{
 		case CTRLCODE('C'):
 			edit_mode = prev_mode;
 			break;
 		case KEY_CR:
-			if (execute_line_cmd(edit_line_buf)) {
+			switch(md) {
+				case EM_LINE: rc = execute_line_cmd(edit_line_buf); break;
+				case EM_SEARCH: rc = execute_search_cmd(edit_line_buf); break;
+			}
+			if (rc) {
 				beep();
 				// handle error
 			} else {
@@ -731,6 +745,12 @@ static void process_cmd_ch(const int ch)
 				break;
 			case 'G':
 				move_to_line(cur_buffer->used-1);
+				break;
+			case '/':
+				prev_mode = EM_CMD;
+				edit_mode = EM_SEARCH;
+				memset(edit_line_buf, 0, sizeof(edit_line_buf));
+				edit_line_ptr = edit_line_buf;
 				break;
 			case ':':
 				prev_mode = EM_CMD;
@@ -904,10 +924,11 @@ int main(const int argc, const char *argv[])
 
 		if (ch) switch(edit_mode)
 		{
-			case EM_LINE: process_line_ch(ch); break;
-			case EM_EDIT: process_edit_ch(ch); break;
-			case EM_CMD:  process_cmd_ch(ch);  break;
-			case EM_NULL: errx(1, "edit_mode"); 
+			case EM_LINE:   process_line_ch(ch, edit_mode); break;
+			case EM_SEARCH: process_line_ch(ch, edit_mode); break;
+			case EM_EDIT:   process_edit_ch(ch); break;
+			case EM_CMD:    process_cmd_ch(ch);  break;
+			case EM_NULL:   errx(1, "edit_mode"); 
 		}
 
 		draw();
@@ -916,6 +937,10 @@ int main(const int argc, const char *argv[])
 
 		switch(edit_mode)
 		{
+			case EM_SEARCH:
+				mvwprintw(stdscr, max_scr_y+1, 0, "/%s", edit_line_buf);
+				wmove(stdscr, max_scr_y+1, strlen(edit_line_buf)+1);
+				break;
 			case EM_LINE:
 				mvwprintw(stdscr, max_scr_y+1, 0, ":%s", edit_line_buf);
 				wmove(stdscr, max_scr_y+1, strlen(edit_line_buf)+1);
@@ -947,7 +972,7 @@ int main(const int argc, const char *argv[])
 			case EM_NULL: errx(1, "invalid EM state");
 		}
 
-		if (edit_mode != EM_LINE)
+		if (edit_mode != EM_LINE && edit_mode != EM_SEARCH)
 			wmove(stdscr, curs_y, curs_x);
 
 		wrefresh(stdscr);

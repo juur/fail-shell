@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
-#include <getopt.h>
 
 static void show_usage(const char *message)
 {
@@ -341,7 +340,7 @@ redo:
 							mod = 1;
 							op++;
 							putchar(c);
-							while (*line && !line++ == c) ;
+							while (*line && *line++ != c) ;
 						}
 					}
 					if (skip)

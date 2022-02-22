@@ -155,6 +155,7 @@ static void init(void)
 		errx(1, "keypad");
 }
 
+__attribute__((nonnull))
 static buffer_t *readfile(FILE *restrict f, char *restrict name)
 {
 	char buf[BUFSIZ];
@@ -348,9 +349,9 @@ static ssize_t compute_offsetx(const ssize_t pos)
 	}
 }
 
-static void move_to_col(size_t tgt)
+static void move_to_col(const size_t target)
 {
-	tgt = max(0, min(tgt, cur_line->used - 1));
+	size_t tgt = max(0, min(target, cur_line->used - 1));
 
 	const ssize_t actx = compute_linex();
 	const ssize_t oldx = compute_offsetx(actx);
@@ -540,7 +541,7 @@ static void insert_char(const char c)
 	move_right();
 }
 
-static int execute_line_cmd(const char *str)
+static int execute_line_cmd(const char *const str)
 {
 	if (!str || !*str)
 		return 1;
@@ -564,10 +565,10 @@ static int execute_line_cmd(const char *str)
 	return 0;
 }
 
-static int execute_search_cmd(const char *str)
+static int execute_search_cmd(const char *const str)
 {
 	if (!str || !*str)
-		return 0;
+		return 1;
 
 	return 0;
 }
@@ -608,7 +609,8 @@ static void stop_cmd(void)
 	cmd_repeat = 1;
 }
 
-static int handler_g(const int *ch)
+__attribute__((nonnull))
+static int handler_g(const int *const ch)
 {
 	if (ch[1] == 0)
 		return 0;
@@ -622,7 +624,8 @@ static int handler_g(const int *ch)
 	return 1;
 }
 
-static int handler_d(const int *ch)
+__attribute__((nonnull))
+static int handler_d(const int *const ch)
 {
 	if (ch[1] == 0) 
 		return 0;
@@ -654,6 +657,7 @@ static int handler_d(const int *ch)
 	return 1;
 }
 
+__attribute__((nonnull))
 static int (*lookup_cmd_func(const int ch))(const int *)
 {
 	switch(ch)
@@ -852,6 +856,7 @@ static void process_edit_ch(const int ch)
 	}
 }
 
+__attribute__((nonnull))
 static int process_esc_sequence(const int *restrict buf)
 {
 	return ERR;
@@ -859,7 +864,7 @@ static int process_esc_sequence(const int *restrict buf)
 
 /* global function definitions */
 
-int main(const int argc, const char *argv[])
+int main(const int argc, const char *const argv[])
 {
 	const char *name = (argc>1) ? argv[1] : "/etc/passwd";
 

@@ -11,9 +11,15 @@ DESTDIR			:=
 CC				:= gcc
 CXX				:=
 #CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter
-CFLAGS			:= -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter -Wall
+CFLAGS			:= -std=c11 -g -O -Wno-unused-function -Wno-unused-parameter -Wall -Wextra
+ifeq ($(FAIL),1)
+CFLAGS			+= -nostdinc -I../fail-libc/include
+endif
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) -D_XOPEN_SOURCE=700
 LDFLAGS			:=
+ifeq ($(FAIL),1)
+LDFLAGS			+= -nostdlib -L../fail-libc/lib ../fail-libc/lib/libc.a ../fail-libc/lib/crt1.o
+endif
 # /home/build/opt/lib64/libncurses.a
 NCURSES_LD		:= 
 CAT				:= cat
@@ -32,6 +38,9 @@ PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
 skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
 broken_SRCS		:= awk.c
+ifeq ($(FAIL),1)
+broken_SRCS     += mount.c
+endif
 
 prefix		:= /usr/local
 datarootdir := $(prefix)/share
@@ -69,24 +78,24 @@ $(objdir)/.d:
 	@mkdir -p $(objdir)/.d 2>/dev/null
 
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
-	$(CC) $(LDFLAGS) $< -o $@
+	$(CC) $< $(LDFLAGS) -o $@
 
 
 
 $(objdir)/bin/vi: $(objdir)/vi.o
-	$(CC) $(LDFLAGS) $< -lncurses -o $@
+	$(CC) $< $(LDFLAGS) -lncurses -o $@
 
 $(objdir)/bin/awk: $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o $(objdir)/awk.o  
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CC) $^ $(LDFLAGS) -o $@
 
 $(objdir)/bin/make: $(objdir)/make.y.tab.o $(objdir)/make.grammar.yy.o $(objdir)/make.o 
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CC) $^ $(LDFLAGS) -o $@
 
 $(objdir)/bin/sh: $(objdir)/sh.y.tab.o $(objdir)/sh.grammar.yy.o $(objdir)/sh.o
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CC) $^ $(LDFLAGS) -o $@
 
 $(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CC) $^ $(LDFLAGS) -o $@
 
 
 

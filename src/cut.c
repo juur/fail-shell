@@ -1,12 +1,12 @@
 #define _XOPEN_SOURCE 700
 
 #include <err.h>
-#include <getopt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <limits.h>
+#include <unistd.h>
 
 struct range {
 	int from;

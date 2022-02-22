@@ -295,7 +295,7 @@ static int do_chmod(mode_t mode, struct clause *list[], const char *file)
 		else // PERMCOPY
 		{
 			struct perm p;
-			mode_t save;
+			mode_t save = 0;
 
 			switch (cur->action.permcopy)
 			{

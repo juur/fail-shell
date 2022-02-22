@@ -3,6 +3,9 @@
 #include <stdio.h>
 
 static char tmpbuf[BUFSIZ];
+
+int yylex();
+void yyerror(const char *s);
 %}
 
 %union {

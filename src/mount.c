@@ -1,7 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <stdlib.h>
-#include <getopt.h>
 #include <err.h>
 #include <string.h>
 #include <strings.h>
@@ -16,25 +15,27 @@
 
 /* local variable defintions */
 
-static int opt_all = 0;
+static int opt_all     = 0;
 static int opt_verbose = 0;
-static int opt_nomtab = 0;
-static int opt_rdonly = 0;
-static int opt_mandlock = 0;
-static int opt_noatime = 0;
-static int opt_nodev = 0;
-static int opt_nodiratime = 0;
-static int opt_noexec = 0;
-static int opt_nosuid = 0;
-static int opt_relatime = 0;
-static int opt_silent = 0;
-static int opt_strictatime = 0;
-static int opt_sync = 0;
-static int opt_umount = 0;
-static int opt_force = 0;
+static int opt_nomtab  = 0;
+static int opt_rdonly  = 0;
+static int opt_umount  = 0;
+static int opt_force   = 0;
+
+//static int opt_mandlock = 0;
+//static int opt_noatime = 0;
+//static int opt_nodev = 0;
+//static int opt_nodiratime = 0;
+//static int opt_noexec = 0;
+//static int opt_nosuid = 0;
+//static int opt_relatime = 0;
+//static int opt_silent = 0;
+//static int opt_strictatime = 0;
+//static int opt_sync = 0;
 
 /* local function declarations */
 
+__attribute__((nonnull(1,2,5)))
 static int do_mount(const char *src, const char *target, const char *fstype, 
 		unsigned long mountflags, const void *data, bool silent);
 
@@ -84,9 +85,16 @@ static void trim(char *buf)
 	while (*ptr && isspace(*ptr)) *ptr-- = '\0';
 }
 
-static unsigned long parse_options(char *options, unsigned long mountflags, char *result_options)
+__attribute__((nonnull))
+static unsigned long parse_options(const char *opts, unsigned long mountflags, char *result_options)
 {
 	char *tok;
+    char *options;
+
+    if((options = strdup(opts)) == NULL) {
+        errx(EXIT_FAILURE, "strdup");
+    }
+
 	tok = strtok(options, ",");
 
 	while ( tok )
@@ -151,9 +159,12 @@ skip:
 	}
 
 	warnx("result_options = %s", result_options);
+
+    free(options);
 	return mountflags;
 }
 
+__attribute__((nonnull))
 static struct mntent *search_for(char *name)
 {
 	struct stat sb;
@@ -195,6 +206,7 @@ static struct mntent *search_for(char *name)
 	return found;
 }
 
+__attribute__((nonnull))
 static int do_auto_mount(const char *src, const char *target,
 		unsigned long mountflags, const void *data)
 {
@@ -231,6 +243,7 @@ static int do_auto_mount(const char *src, const char *target,
 	return -1;
 }
 
+__attribute__((nonnull(1,2,5)))
 static int do_mount(const char *src, const char *target, const char *fstype,
 		unsigned long mountflags, const void *data, bool silent)
 {
@@ -318,9 +331,9 @@ int main(int argc, char *argv[])
 		opt_options = resopt;
 	}
 
-	char *source = NULL;
-	char *target = NULL;
-	char *type = NULL;
+	const char *source = NULL;
+	const char *target = NULL;
+	const char *type = NULL;
 
 	if ( (argc - optind) == 2 ) {
 		source = argv[optind++];

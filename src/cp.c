@@ -1,7 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <stdlib.h>
-#include <getopt.h>
 #include <err.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -77,6 +76,9 @@ static int do_cp(char *tsrc, char *tdst, int iscmdline)
 	int free_dst = 0;
 	int free_src = 0;
 	int rc = 0;
+
+	int dst_fd = -1;
+	int src_fd = -1;
 
 	/* deference the source as required */
 	tsrc = deref(tsrc, iscmdline);
@@ -265,7 +267,7 @@ skip:
 	}
 
 	/* ensure we can open the source file */
-	const int src_fd = open(src, src_flags);
+	src_fd = open(src, src_flags);
 	if (src_fd == -1 || fstat(src_fd, &src_sb)) {
 		warn("open: %s", src);
 		goto err_free;
@@ -273,7 +275,7 @@ skip:
 
 	/* create the target file, if the destination already exists, handle forced
 	 * overwritting. This is done last to reduce left over files */
-	int dst_fd = open(dst, dst_flags, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+	dst_fd = open(dst, dst_flags, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 	if (dst_fd == -1) {
 		if (errno == EEXIST && opt_force) {
 			if (!rmok(dst))

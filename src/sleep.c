@@ -13,12 +13,12 @@ int main(int argc, char *argv[])
 
 	errno = 0;
 	char *endptr = NULL;
-	long duration = strtol(argv[2], &endptr, 10);
+	long duration = strtol(argv[1], &endptr, 10);
 
 	if (errno)
-		err(EXIT_FAILURE, "Error parsing '%s'", argv[2]);
+		err(EXIT_FAILURE, "Error parsing '%s'", argv[1]);
 	if (endptr != NULL)
-		errx(EXIT_FAILURE, "Not a number '%s'", argv[2]);
+		errx(EXIT_FAILURE, "Not a number '%s'", argv[1]);
 	if (duration < 0)
 		errx(EXIT_FAILURE, "Positive time only");
 

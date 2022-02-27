@@ -10,5 +10,5 @@ int main(int argc, char *argv[])
 	if (argc != 2)
 		errx(EXIT_FAILURE, "Usage: dirname path");
 
-	printf(dirname(argv[1]));
+	printf("%s", dirname(argv[1]));
 }

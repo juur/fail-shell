@@ -14,7 +14,7 @@
 #include <time.h>
 #include <libgen.h>
 
-static int show_usage()
+static void show_usage()
 {
 	fprintf(stderr, "Usage: ls [-CFRacdilqrtu1] [file...]\n");
 	exit(EXIT_FAILURE);
@@ -246,8 +246,10 @@ int main(int argc, char *argv[])
 				break;
 			case 'n':
 				opt_supress_names = 1;
+				// fall through
 			case 'l':
 				opt_show_long = 1;
+				// fall through
 			case '1':
 				opt_show_one = 1;
 				break;

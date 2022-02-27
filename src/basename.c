@@ -37,7 +37,7 @@ int main(int argc, char *argv[])
 				*suf_start = '\0';
 		}
 	}
-	
+done:	
 	printf("%s\n", bname);
 	free(bname);
 

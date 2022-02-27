@@ -86,6 +86,7 @@ static int binaryintop(const char *op, long n1, long n2)
 	else {
 		errx(EXIT_FAILURE, "unknown operator %s", op);
 	}
+	return 0;
 }
 
 static int binaryop(const char *op, const char *arg0, const char *arg1)
@@ -118,6 +119,8 @@ static int binaryop(const char *op, const char *arg0, const char *arg1)
 	} else {
 		errx(EXIT_FAILURE, "unknown operator %s", op);
 	}
+
+	return 0;
 }
 
 static int unaryop(const char *op, const char *arg)

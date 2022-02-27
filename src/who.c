@@ -31,7 +31,7 @@ static char *uttype(const short ut)
 	}
 }
 
-int main(const int argc, const char *restrict argv[])
+int main(void)
 {
 	setutxent();
 
@@ -52,10 +52,12 @@ int main(const int argc, const char *restrict argv[])
 			case LOGIN_PROCESS:
 				printf(" ut_line: %s\n", ut->ut_line);
 				printf(" ut_user: %s\n", ut->ut_user);
+				// fall through
 			case DEAD_PROCESS:
 			case INIT_PROCESS:
 				//printf("   ut_id: %s\n", ut->ut_id);
 				printf("  ut_pid: %u\n", ut->ut_pid);
+				// fall through
 			case BOOT_TIME:
 			case OLD_TIME:
 			case NEW_TIME:
@@ -67,4 +69,5 @@ int main(const int argc, const char *restrict argv[])
 	}
 
 	endutxent();
+	exit(EXIT_SUCCESS);
 }

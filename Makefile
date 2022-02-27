@@ -11,7 +11,17 @@ DESTDIR			:=
 CC				:= gcc
 CXX				:=
 #CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter
-CFLAGS			:= -std=c11 -g -O -Wno-unused-function -Wno-unused-parameter -Wall -Wextra
+CFLAGS			:= \
+	-std=c11 \
+	-pipe \
+	-ggdb3 \
+	-O0 \
+	-fno-builtin \
+	-Wno-unused-function \
+	-Wno-unused-parameter \
+	-Wall -Wextra \
+	-Wformat=2 \
+	-pedantic
 ifeq ($(FAIL),1)
 CFLAGS			+= -nostdinc -I../fail-libc/include
 endif
@@ -37,9 +47,9 @@ DEPS			:= 1
 PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
 skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
-broken_SRCS		:= awk.c
+broken_SRCS		:= awk.c sh_old.c
 ifeq ($(FAIL),1)
-broken_SRCS     += mount.c
+broken_SRCS     += mount.c sh.c make.c vi.c
 endif
 
 prefix		:= /usr/local
@@ -59,7 +69,7 @@ all_SRCS			 := $(filter-out $(skip_SRCS), $(notdir $(wildcard $(srcdir)/src/*.c)
 all_SRCS			 := $(filter-out $(broken_SRCS), $(all_SRCS))
 all_HEADERS			 := $(notdir $(wildcard $(srcdir)/src/*.h))
 all_PACKAGES		 := $(addprefix $(objdir)/bin/,$(all_SRCS:.c=)) 
-all_SPECIAL_PACKAGES := $(addprefix $(objdir)/bin/,$(skip_SRCS:.c=))
+all_SPECIAL_PACKAGES := $(addprefix $(objdir)/bin/,$(filter-out $(broken_SRCS:.c=), $(skip_SRCS:.c=)))
 package_OBJS		 := $(addprefix $(objdir)/,$(all_SRCS:.c=.o))
 skip_OBJS			 := $(addprefix $(objdir)/,$(skip_OBJS:.c=.o))
 

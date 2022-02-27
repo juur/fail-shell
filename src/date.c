@@ -50,7 +50,7 @@ int main(int argc, char *argv[])
 	const time_t t = time(NULL);
 
 	if (t == -1) {
-		err(EXIT_FAILURE, NULL);
+		err(EXIT_FAILURE, "time");
 	}
 
 	const struct tm *tm;
@@ -61,13 +61,13 @@ int main(int argc, char *argv[])
 		tm = localtime(&t);
 
 	if (tm == NULL) {
-		err(EXIT_FAILURE, NULL);
+		err(EXIT_FAILURE, "gm/localtime");
 	}
 
 	char buf[BUFSIZ];
 
 	if (strftime(buf, BUFSIZ, fmt, tm) == 0) {
-		err(EXIT_FAILURE, NULL);
+		err(EXIT_FAILURE, "strftime");
 	}
 
 	printf("%s\n", buf);

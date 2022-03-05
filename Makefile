@@ -19,6 +19,7 @@ CFLAGS			:= \
 	-fno-builtin \
 	-Wno-unused-function \
 	-Wno-unused-parameter \
+	-Wno-unused-label \
 	-Wall -Wextra \
 	-Wformat=2 \
 	-pedantic

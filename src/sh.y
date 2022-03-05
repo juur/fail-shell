@@ -362,7 +362,7 @@ cmd_suffix       :            io_redirect			{ debug_printf("cmd_suffix.1\n"); }
                  |            WORD					{ debug_printf("@cmd_suffix.3 [%s]\n", $1); $$ = nString($1); }
                  | cmd_suffix WORD					{ debug_printf("@cmd_suffix.4 +[%s]\n", $2); $$ = nodeAppend(nString($2), $1); }
 				 |            expansion				{ debug_printf("cmd_suffix.5\n"); $$ = nString($1); }
-				 | cmd_suffix expansion				{ debug_printf("cmd_suffix.6\n"); $$ = nodeAppend(nString($2), $1); }
+				 | cmd_suffix expansion				{ debug_printf("cmd_suffix.6\n"); $$ = nodeAppend($2, $1); }
                  ;
 redirect_list    :               io_redirect		{ debug_printf("redirect_list.1\n"); }
                  | redirect_list io_redirect		{ debug_printf("redirect_list.2\n"); $$ = nodeAppend($2, $1); }

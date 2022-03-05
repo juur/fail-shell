@@ -1437,6 +1437,7 @@ static command_t *execute(const command_t *c, char *buf, const size_t len, const
 				s_successful = false;
 			} else
 				break;
+			/* fall through */
 		case 'b':
 			if (c->arg.jmp.to)
 				ret = c->arg.jmp.to->cmd;

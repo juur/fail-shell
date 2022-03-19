@@ -1,6 +1,9 @@
 %{
 #define _XOPEN_SOURCE 700
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <stdbool.h>
 
 #include "sh.h"
@@ -34,12 +37,12 @@ void yyerror(void *, const char *s);
 %token<string>	PARAMETER
 
 
-%token TOK_VAR_EXP
+/*%token TOK_VAR_EXP
+%token TOK_COLHYP*/
 
 /* The following are the operators (see XBD Operator)
    containing more than one character. */
 
-%token TOK_COLHYP
 
 %token  AND_IF    OR_IF    DSEMI
 /*      '&&'      '||'     ';;'    */
@@ -83,12 +86,12 @@ void yyerror(void *, const char *s);
 %type<node> function_body brace_group do_group simple_command
 %type<node> cmd_suffix cmd_name cmd_prefix io_redirect cmd_word
 %type<node> redirect_list io_file pattern io_here
-%type<node> expansion
+/*%type<node> expansion*/
 
 %type<string> name 
 %type<string> wordlist in fname filename
 %type<string> here_end 
-%type<string> variable_expansion
+/*%type<string> variable_expansion*/
 
 %type<chr> separator_op separator sequential_sep linebreak newline_list ';' '&'
 
@@ -361,8 +364,8 @@ cmd_suffix       :            io_redirect			{ debug_printf("cmd_suffix.1\n"); }
                  | cmd_suffix io_redirect			{ debug_printf("cmd_suffix.2\n"); $$ = nodeAppend($2, $1); }
                  |            WORD					{ debug_printf("@cmd_suffix.3 [%s]\n", $1); $$ = nString($1); }
                  | cmd_suffix WORD					{ debug_printf("@cmd_suffix.4 +[%s]\n", $2); $$ = nodeAppend(nString($2), $1); }
-				 |            expansion				{ debug_printf("cmd_suffix.5\n"); $$ = nString($1); }
-				 | cmd_suffix expansion				{ debug_printf("cmd_suffix.6\n"); $$ = nodeAppend($2, $1); }
+/*				 |            expansion				{ debug_printf("cmd_suffix.5\n"); $$ = nString($1); }
+				 | cmd_suffix expansion				{ debug_printf("cmd_suffix.6\n"); $$ = nodeAppend($2, $1); }*/
                  ;
 redirect_list    :               io_redirect		{ debug_printf("redirect_list.1\n"); }
                  | redirect_list io_redirect		{ debug_printf("redirect_list.2\n"); $$ = nodeAppend($2, $1); }
@@ -404,7 +407,7 @@ separator        : separator_op linebreak	{ debug_printf("sep.1 [%c %02x]\n", $1
 sequential_sep   : ';' linebreak			{ debug_printf("seq_sep.1 [; %02x]\n", $2); $$=$2; }
                  | newline_list				{ debug_printf("seq_sep.2 [%02x]\n", $1); $$=$1; }
                  ;
-
+/*
 expansion		   : variable_expansion		{ debug_printf("expansion.1\n"); $$=$1; }
 				   ;
 
@@ -412,6 +415,6 @@ variable_expansion : TOK_VAR_EXP PARAMETER Rbrace			{ debug_printf("variable_exp
 				   | TOK_VAR_EXP PARAMETER TOK_COLHYP		{ debug_printf("variable_expansion.2\n"); $$=$2; }
 				   | TOK_VAR_EXP PARAMETER TOK_COLHYP WORD	{ debug_printf("variable_expansion.3\n"); $$=$2; }
 				   ;
-
+*/
 %%
 #include "sh.h"

@@ -6,16 +6,12 @@ objdir := obj
 .SUFFIXES:
 .SUFFIXES: .c .o
 
-DESTDIR			:=
-# /home/build/opt/host/bin/tcc
-CC				:= gcc
-CXX				:=
-#CFLAGS			:= -pedantic -Wall -Wextra -std=c99 -g -O -Wno-unused-function -Wno-unused-parameter
-CFLAGS			:= \
-	-std=c11 \
-	-pipe \
+DESTDIR	:=
+CC		:= gcc
+CXX		:=
+CFLAGS	:= \
+	-std=c99 \
 	-ggdb3 \
-	-O0 \
 	-fno-builtin \
 	-Wno-unused-function \
 	-Wno-unused-parameter \
@@ -23,15 +19,10 @@ CFLAGS			:= \
 	-Wall -Wextra \
 	-Wformat=2 \
 	-pedantic
-ifeq ($(FAIL),1)
-CFLAGS			+= -nostdinc -I../fail-libc/include
-endif
-CPPFLAGS		:= -I$(srcdir) -I$(objdir) -D_XOPEN_SOURCE=700
+
+NDEBUG			:=
+CPPFLAGS		:= -I$(srcdir) -I$(objdir) $(NDEBUG)
 LDFLAGS			:=
-ifeq ($(FAIL),1)
-LDFLAGS			+= -nostdlib -L../fail-libc/lib ../fail-libc/lib/libc.a ../fail-libc/lib/crt1.o
-endif
-# /home/build/opt/lib64/libncurses.a
 NCURSES_LD		:= 
 CAT				:= cat
 TAR				:= tar
@@ -49,8 +40,15 @@ PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
 skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
 broken_SRCS		:= awk.c sh_old.c
+
+# fail libc support pass FAIL=1 to make
 ifeq ($(FAIL),1)
+FAIL_INC		:= ../fail-libc/include
+FAIL_LIB		:= ../fail-libc/lib
+# these don't work with fail-libc yet, at all
 broken_SRCS     += mount.c sh.c make.c vi.c
+CFLAGS			+= -nostdinc -I$(FAIL_INC)
+LDFLAGS			+= -nostdlib -L$(FAIL_LIB) -lc $(FAIL_LIB)/crt1.o
 endif
 
 prefix		:= /usr/local
@@ -77,6 +75,7 @@ skip_OBJS			 := $(addprefix $(objdir)/,$(skip_OBJS:.c=.o))
 ifeq ($(DEPS),1)
 CPPFLAGS += -MMD -MP
 endif
+
 CPPFLAGS += -I$(srcdir)/src
 
 
@@ -111,15 +110,17 @@ $(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
 
 
 $(objdir)/%.grammar.yy.o: $(objdir)/%.grammar.yy.c $(objdir)/%.grammar.yy.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
 
-$(objdir)/%.grammar.yy.h $(objdir)/%.grammar.yy.c: $(srcdir)/src/%.l $(srcdir)/src/%.h
-	$(LEX) $(L_FLAGS) --header-file=$(objdir)/$(<F:%.l=%.grammar.yy.h) -o $@ $<
+$(objdir)/%.grammar.yy.c $(objdir)/%.grammar.yy.h: $(srcdir)/src/%.l $(srcdir)/src/%.h
+	$(LEX) $(L_FLAGS) --header-file=$(objdir)/$(<F:%.l=%.grammar.yy.h) -o $(objdir)/$(<F:%.l=%.grammar.yy.c) $<
 
 
 $(objdir)/%.y.tab.o: $(objdir)/%.y.tab.c $(objdir)/%.tab.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
 
 $(objdir)/%.y.tab.c $(objdir)/%.y.tab.h: $(srcdir)/src/%.y $(srcdir)/src/%.h
-	$(YACC) $(Y_FLAGS) -b $*.y -o $@ $<
+	$(YACC) $(Y_FLAGS) -b $*.y -o $(objdir)/$(<F:%.y=%.y.tab.c) $<
 
 
 .PHONY: install uninstall
@@ -138,7 +139,11 @@ clean: mostlyclean
 	$(RM) $(all_PACKAGES) $(objdir)/bin/{make,sh,vi} \
 		$(objdir)/*.yy.c $(objdir)/*.tab.c \
 		$(objdir)/*.tab.h $(objdir)/.d/*.d \
-		*.y.tab.h
+		$(objdir)/*.grammar.yy.[cdh] \
+		$(objdir)/*.tab.[cdh] \
+		$(objdir)/*.o \
+		*.y.tab.h \
+		*.grammar.yy.h
 
 distclean: clean
 	$(RM) config.log

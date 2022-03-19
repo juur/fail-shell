@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <libgen.h>
+#include <termios.h>
 
 #include "sh.h"
 #include "sh.y.tab.h"
@@ -1024,8 +1025,11 @@ static char *parseenv(const char *restrict val, int *restrict rc)
 		} else
 			ret = strdup("");
 	} else {
-		err(EXIT_FAILURE, "reached a place we shouldn't get to");
+		return "";
 	}
+//	} else {
+//		errx(EXIT_FAILURE, "reached a place we shouldn't get to");
+//	}
 
 //done:
 	if (env) { free(env); env = NULL; }
@@ -1035,6 +1039,7 @@ fail:
 	return NULL;
 }
 
+/* TODO this should be replaced with lex/yacc combination */
 char *expand(const char *restrict str, int *rc)
 {
 	char buf[BUFSIZ] = {0};
@@ -1067,7 +1072,8 @@ char *expand(const char *restrict str, int *rc)
 					dst += (len = min(BUFSIZ - strlen(buf), strlen(val)));
 					strncat(buf, val, len);
 					free(val); val = NULL;
-				}
+				} else
+					strncat(buf, "", BUFSIZ-strlen(buf));
 				src++;
 				continue;
 			} else if (isalpha(next)) {
@@ -1193,7 +1199,7 @@ int evaluate(node *n, int pad, int do_next)
 				if (n->arg1->type == N_STRING)
 					n->arg1->evaluated = expand(n->arg1->value, &rc);
 				else
-					err(EXIT_FAILURE, "N_SIMPLE");
+					errx(EXIT_FAILURE, "N_SIMPLE");
 				push(&tmpargs, n->arg1->evaluated);
 
 				if (n->arg2) {
@@ -1307,9 +1313,14 @@ node *nFunc(char *restrict fname, node *restrict body)
 
 node *nAssign(char *restrict str)
 {
+	if (!str) 
+		return NULL;
+
 	node *ret = newNode(N_ASSIGN);
 	char *tok = strchr(str, '=');
-	if(!tok) return NULL;
+	if (!tok) 
+		return NULL;
+
 	ret->value = strndup(str, tok - str);
 	ret->arg0 = nString(tok + 1);
 	return ret;
@@ -1870,7 +1881,6 @@ again:
 	}
 }
 #endif
-void yyparse(void *);
 //int yylex_init(void *);
 //void *yy_scan_string (const char *yy_str, void *yyscanner );
 
@@ -1887,15 +1897,59 @@ static bool get_next_parser_string(int prompt)
 	if (prompt)
 		printf("> ");
 
-	parser_string = fgets(buf, BUFSIZ, stdin);
+	char *ptr = buf;
+	ssize_t rc;
+	bool eof = false, running = true;;
 
-	if (parser_string == NULL) {
-		if (feof(stdin))
-			return true;
-		exit(EXIT_FAILURE);
+	while(running)
+	{
+		char in;
+		if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
+			exit(EXIT_FAILURE);
+		if (rc == 0) {
+			eof = true;
+			break;
+		}
+		//printf("%02x\n", in);
+
+		switch (in)
+		{
+			case 0x0b:
+				in = 0x7f;
+				while(ptr-- > buf)
+					write(STDOUT_FILENO, &in, 1);
+				memset(buf, 0, sizeof(buf));
+				ptr = buf;
+				break;
+			case 0x7f:
+				*ptr = '\0';
+				if(ptr>buf) ptr--;
+				goto print;
+				break;
+			case '\n':
+				running = false;
+				goto print;
+				break;
+			default:
+				*(ptr++) = in;
+print:				
+				if ((write(STDOUT_FILENO, &in, 1)) == -1)
+					exit(EXIT_FAILURE);
+				break;
+		}
 	}
-	return false;
+
+	*ptr = '\0';
+
+	parser_string = buf;
+
+	printf("read:\"%s\"\n", parser_string);
+
+	return eof;
 }
+
+extern void yyparse(void *);
+extern int yydebug;
 
 int main(/*int argc, char *argv[]*/)
 {
@@ -1905,6 +1959,16 @@ int main(/*int argc, char *argv[]*/)
 	parser_init();
 	void *scanner;
 
+	shell_state_t state;
+	memset(&state, 0, sizeof(state));
+
+	struct termios term;
+
+	if (!tcgetattr(STDIN_FILENO, &term)) {
+		term.c_lflag &= ~(ICANON|ECHO|ECHOE|ECHOK|ECHONL);
+		tcsetattr(STDIN_FILENO, TCSANOW, &term);
+	}
+
 	while(1)
 	{
 		if (printf("# ") < 0)
@@ -1913,10 +1977,11 @@ int main(/*int argc, char *argv[]*/)
 		if (get_next_parser_string(0))
 			break;
 
-		printf("parsing '%s'\n", parser_string);
-		if(yylex_init(&scanner))
+		//printf("parsing '%s'\n", parser_string);
+		//yydebug = 1;
+		if(yylex_init_extra(&state, &scanner))
 			exit(EXIT_FAILURE);
-		yyset_debug(1,scanner);
+		//yyset_debug(1,scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);
 		yylex_destroy(scanner);

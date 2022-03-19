@@ -3,14 +3,18 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 #include "sh.h"
 #include "sh.y.tab.h"
 %}
 
-%x STRING_SQ STRING_DQ ST_WORD ST_VAR_EXP
+%x STRING_SQ STRING_DQ ST_WORD ST_VAR_EXP ST_ASSIGNMENT
+%x EXP_VAR EXP_SH
 
-%option noyywrap warn stack nodefault debug reentrant bison-bridge
+%option bison-bridge noyywrap warn stack 
+%option nodefault debug reentrant extra-type="shell_state_t *"
 
 SQ		'
 DQ		\"
@@ -27,85 +31,156 @@ SEMI	;
 <*>{BSLASH}"#"/{CHAR}*		{ *yytext = '#'; yytext[1] = '\0'; yyleng = 1; yymore(); }
 <*>"#"{CHAR}*{NEWLINE}
 
+<*>"${"		{ 
+	yy_push_state(EXP_VAR, yyscanner); 
+	yyextra->skip++;
+//	if(yyextra->skip++) 
+		yymore(); 
+//	printf("--exp_var skip now %d\n", yyextra->skip);
+}
+
+<*>"$("		{ 
+	yy_push_state(EXP_SH, yyscanner);  
+	yyextra->skip++;
+//	if(yyextra->skip++)
+		yymore();
+//	printf("--exp_sh  skip now %d\n", yyextra->skip);
+}
+
+<ST_WORD,ST_ASSIGNMENT,EXP_VAR,EXP_SH>{
+	
+	({SQ}|{DQ})/({WS}+|{CHAR}+) {
+		yy_push_state(yytext[yyleng-1] == '\"' ? STRING_DQ : STRING_SQ, yyscanner);
+		if (yyextra->skip) {
+			yyextra->skip++;
+//			printf("--skip now %d\n", yyextra->skip);
+			yymore();
+		}
+	}
+}
+
+<EXP_VAR>{
+	/* TODO: \} */
+	"}"		{ 
+				yy_pop_state(yyscanner); 
+				yyextra->skip--;
+//				printf("--exp_var skip now %d\n", yyextra->skip);
+				
+				if (!yyextra->skip) {
+					//printf("--exp_var returning WORD \"%s\"\n", yytext);
+					yylval->string = strdup(yytext);
+					return WORD;
+				} else
+					yymore();
+			}
+	.		{ yymore(); }
+}
+
+<EXP_SH>{
+	/* TODO: \) */
+	")"     { 
+				yy_pop_state(yyscanner); 
+				yyextra->skip--; 
+//				printf("--exp_sh: skip now %d\n", yyextra->skip);
+
+				if(!yyextra->skip) {
+					//printf("--exp_sh  returning WORD \"%s\"\n", yytext);
+					yylval->string = strdup(yytext);
+					return WORD;
+				} else
+					yymore();
+			}
+	.		{ yymore(); }
+}
+
 <STRING_SQ>{
 	
 	{SQ}	{
-				yylval->string = strdup(yytext);
 				yy_pop_state(yyscanner);
-				return WORD;
-			}
 
-	{CHAR}/{SQ}	{
+				if(yyextra->skip) {
+					yyextra->skip--;
+					//printf("--string_sq skip now %d\n", yyextra->skip);
+					yymore();
+				} else {
 					yylval->string = strdup(yytext);
-					input(yyscanner);
-					yy_pop_state(yyscanner);
 					return WORD;
 				}
+			}
+
+	./{SQ}	{
+				input(yyscanner);
+				yy_pop_state(yyscanner);
+
+				if(yyextra->skip) {
+					yyextra->skip--;
+					//printf("--string_sq skip now %d\n", yyextra->skip);
+					yymore();
+				} else {
+					yylval->string = strdup(yytext);
+					return WORD;
+				}
+			}
+
+	. { yymore(); }
 }
 
 <STRING_DQ>{
 	
+	"\\"{DQ} { yyleng-=2; yytext[yyleng] = '"'; yymore(); }
+	
 	{DQ}	{
-				yylval->string = strdup(yytext);
 				yy_pop_state(yyscanner);
-				return WORD;
+				if(yyextra->skip) {
+					yyextra->skip--;
+					//printf("--string_dq skip now %d\n", yyextra->skip);
+					yymore();
+				} else {
+					yylval->string = strdup(yytext);
+					return WORD;
+				}
 			}
 
-	${CHAR}/{DQ}	{
-		yylval->string = strdup(yytext);
-		input(yyscanner);
-		yy_pop_state(yyscanner);
-		return WORD;
-	}
+
+	.{DQ}	{
+				yy_pop_state(yyscanner);
+				if(yyextra->skip) {
+					yyextra->skip--;
+					//printf("--string_dq skip now %d\n", yyextra->skip);
+					yymore();
+				} else {
+					yyless(yyleng-1);
+					input(yyscanner);
+					yylval->string = strdup(yytext);
+					return WORD;
+				}
+			}
+
+	. { yymore(); }
 }
 
-<ST_WORD>{
-
-	"${" {
-		yy_push_state(ST_VAR_EXP, yyscanner);
-		return TOK_VAR_EXP;
-	}
-}
-
-<ST_VAR_EXP>{
+<ST_ASSIGNMENT>{
 	
-	"}" {
-		yy_pop_state(yyscanner);
-		return Rbrace;
-	}
-
-	":-" {
-		yy_pop_state(yyscanner);
-		yy_push_state(ST_WORD, yyscanner);
-		return TOK_COLHYP;
-	}
-
-	{CHAR}/("}"|":") {
-				   yylval->string = strdup(yytext);
-				   return PARAMETER;
-			   }
-
-	{CHAR} { yymore(); }
+	{CHAR}/{WS}	{	
+						yymore(); 
+					}
+	
+	/* We need to handle the case of A=1<EOF> */
+	{CHAR}+|{WS}+	{
+				yy_pop_state(yyscanner);
+				yylval->string = strdup(yytext);
+				return ASSIGNMENT_WORD;
+			}
 }
 
 <ST_WORD>{
-
-	"}" {
-		yy_pop_state(yyscanner);
-		yylval->string = strdup(yytext);
-		return WORD;
-	}
-		
-	({SQ}|{DQ})/({WS}+|{CHAR}+) {
-		yy_push_state(*yytext == 0x22 ? STRING_DQ : STRING_SQ, yyscanner);
-	}
-
+	
 	{NEWLINE} { yy_pop_state(yyscanner); return NEWLINE; }
 	{SEMI}    { yy_pop_state(yyscanner); return ';'; }
 
 	{CHAR}/({SQ}|{DQ}) {
 						   yylval->string = strdup(yytext);
-						   yy_push_state(input(yyscanner) == 0x22 ? STRING_SQ : STRING_SQ, yyscanner);
+						   yy_push_state(input(yyscanner) == '\"' ? STRING_SQ : STRING_SQ, yyscanner);
 						   return WORD;
 					   }
 
@@ -122,19 +197,34 @@ SEMI	;
 						}
 
 	{CHAR}/{NEWLINE}	{
-							if (*yytext == 0x27 || *yytext == 0x22) {
+							if (*yytext == '\'' || *yytext == '\"') {
 								yyless(yyleng);
 								input(yyscanner);
-								yy_push_state(*yytext == 0x27 ? STRING_SQ : STRING_DQ, yyscanner);
+								yy_push_state(*yytext == '\'' ? STRING_SQ : STRING_DQ, yyscanner);
 							} else {
 								yylval->string = strdup(yytext);
 								yy_pop_state(yyscanner);
 								return WORD;
 							}
 						}
-
+	{WS}+
+	
 	{CHAR}				{ yymore(); }
 }
+
+"&&"  { return AND_IF;   }
+"||"  { return OR_IF;    }
+";;"  { return DSEMI;    }
+"<<"  { return DLESS;    }
+">>"  { return DGREAT;   }
+"<&"  { return LESSAND;  }
+">&"  { return GREATAND; }
+"<>"  { return LESSGREAT;}
+"<<-" { return DLESSDASH;}
+
+"{" { return Lbrace; }
+"}" { return Rbrace; }
+"!" { return Bang;   }
 
 "if"/({NEWLINE}|{SEMI}|{WS}+)		{ return If;    }
 "then"/({NEWLINE}|{SEMI}|{WS}+)		{ return Then;   }
@@ -148,33 +238,53 @@ SEMI	;
 "while"/({NEWLINE}|{SEMI}|{WS}+)	{ return While; }
 "until"/({NEWLINE}|{SEMI}|{WS}+)	{ return Until; }
 "for"/({NEWLINE}|{SEMI}|{WS}+)		{ return For;   }
+"in"/({NEWLINE}|{SEMI}|{WS}+)		{ return In;    }
 
 
-{EQ}	{ return '='; }
 
 {WS}+
 
-{IDENT}+{EQ} {
-				yylval->string = strdup(yytext);
-				return ASSIGNMENT_WORD;
-			 }
+{SEMI}		{ 
+				if(!yyextra->skip)
+					yymore();
+				else
+					return ';'; 
+			}
 
-{SEMI}	{ return ';'; }
+	/* We need to handle the case of A= and A=<<EOF>> */
+{IDENT}+{EQ}/{CHAR} { yy_push_state(ST_ASSIGNMENT, yyscanner); yymore(); }
+{IDENT}+{EQ}        { yylval->string = strdup(yytext); return ASSIGNMENT_WORD; }
 
-{CHAR}	{
-	yyless(yyleng-1);
-	yy_push_state(ST_WORD, yyscanner);
-		}
+{EQ}		{ return '='; }
 
-{NEWLINE}	{ return NEWLINE; }
+{CHAR}		{
+				yyless(yyleng-1);
+				yy_push_state(ST_WORD, yyscanner);
+			}
+
+{NEWLINE}	{ 
+				//printf("--newline with %s\n", yytext);
+				return NEWLINE; 
+			}
 
 <*><<EOF>>	{
 	static int once = 0;
 	if(yyleng && (once = !once) ) {
+		/*
+		if (YY_START == ST_ASSIGNMENT) {
+			if(yytext)
+				yylval->string = strdup(yytext);
+			printf("--returning ASSIGNMENT_WORD from state %d with %s\n", YY_START, yytext);
+			yy_pop_state(yyscanner);
+			return ASSIGNMENT_WORD;
+		}
+		*/
+		//printf("--eof\n");
 		if(!yytext || !*yytext || !strlen(yytext)) 
 			return 0;
 		if(*yytext == '\n' || *yytext == '\r')
 			return NEWLINE;
+		//printf("--eof returning %s\n", yytext);
 		yylval->string = strdup(yytext);
 		return WORD;
 	} else

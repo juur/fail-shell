@@ -13,6 +13,9 @@ static int opt_chars = 0;
 static int opt_lines = 0;
 static int opt_words = 0;
 
+/* global counts */
+static int glines = 0, gwords = 0, gbytes = 0, gchars = 0;
+
 static void show_usage(void)
 {
 	errx(EXIT_FAILURE, "Usage: wc [-c|-m] [-lw] [file...]");
@@ -20,7 +23,7 @@ static void show_usage(void)
 
 static void do_wc(const char *file)
 {
-	bool do_stdin = file == NULL ? true : false;
+	const bool do_stdin = file == NULL ? true : false;
 	FILE *fp;
 
 	if (!do_stdin && (fp = fopen(file, "r")) == NULL) {
@@ -32,7 +35,7 @@ static void do_wc(const char *file)
 	char *line = NULL;
 	size_t len = 0;
 	ssize_t rc;
-	char *ptr;
+	const char *ptr;
 
 	int nlines=0, nbytes=0, nchars=0, nwords=0;
 
@@ -44,16 +47,19 @@ static void do_wc(const char *file)
 		nbytes += rc;
 		nlines++;
 		ptr = line;
+
 		while (*ptr)
 		{
+			/* skip any leading spaces */
 			while (*ptr && isspace(*ptr)) ptr++;
 			if (!*ptr)
 				break;
+
+			/* now skip the word */
 			while (*ptr && !isspace(*ptr)) ptr++;
 			nwords++;
 		}
 
-next:
 		free(line);
 		line = NULL;
 		len = 0;
@@ -69,9 +75,14 @@ next:
 		printf("%d ", nchars);
 	if (file)
 		printf("%s", file);
+
+	glines += nlines;
+	gwords += nwords;
+	gbytes += nbytes;
+	gchars += gchars;
+
 	fputc('\n', stdout);
 
-done:
 	if (!do_stdin)
 		fclose(fp);
 }
@@ -110,9 +121,25 @@ int main(int argc, char *argv[])
 			opt_lines = opt_words = opt_bytes = 1;
 	}
 
+	const bool summary = (argc - optind > 1) ? true : false;
+
 	if (optind == argc) {
 		do_wc(NULL);
 	} else
 		while (optind < argc)
 			do_wc(argv[optind++]);
+
+	if (summary) {
+		if (opt_lines)
+			printf("%d ", glines);
+		if (opt_words)
+			printf("%d ", gwords);
+		if (opt_bytes)
+			printf("%d ", gbytes);
+		else if (opt_chars)
+			printf("%d ", gchars);
+		printf("total\n");
+	}
+
+	exit(EXIT_SUCCESS);
 }

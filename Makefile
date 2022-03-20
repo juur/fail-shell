@@ -40,6 +40,7 @@ PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
 skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
 broken_SRCS		:= awk.c sh_old.c
+extra_PACKAGES  := chown
 
 # fail libc support pass FAIL=1 to make
 ifeq ($(FAIL),1)
@@ -67,7 +68,8 @@ localedir   := $(datarootdir)/locale
 all_SRCS			 := $(filter-out $(skip_SRCS), $(notdir $(wildcard $(srcdir)/src/*.c)))
 all_SRCS			 := $(filter-out $(broken_SRCS), $(all_SRCS))
 all_HEADERS			 := $(notdir $(wildcard $(srcdir)/src/*.h))
-all_PACKAGES		 := $(addprefix $(objdir)/bin/,$(all_SRCS:.c=)) 
+all_PACKAGES		 := $(addprefix $(objdir)/bin/,$(all_SRCS:.c=))
+all_EXTRA_PACKAGES   := $(addprefix $(objdir)/bin/,$(extra_PACKAGES))
 all_SPECIAL_PACKAGES := $(addprefix $(objdir)/bin/,$(filter-out $(broken_SRCS:.c=), $(skip_SRCS:.c=)))
 package_OBJS		 := $(addprefix $(objdir)/,$(all_SRCS:.c=.o))
 skip_OBJS			 := $(addprefix $(objdir)/,$(skip_OBJS:.c=.o))
@@ -81,7 +83,7 @@ CPPFLAGS += -I$(srcdir)/src
 
 .PHONY: all
 
-all: $(objdir)/.d $(all_PACKAGES) $(all_SPECIAL_PACKAGES)
+all: $(objdir)/.d $(all_PACKAGES) $(all_SPECIAL_PACKAGES) $(all_EXTRA_PACKAGES)
 
 
 $(objdir)/.d:
@@ -90,7 +92,8 @@ $(objdir)/.d:
 $(all_PACKAGES): $(objdir)/bin/%: $(objdir)/%.o
 	$(CC) $< $(LDFLAGS) -o $@
 
-
+$(objdir)/bin/chown: $(objdir)/chgrp.o
+	$(CC) $< $(LDFLAGS) -o $@
 
 $(objdir)/bin/vi: $(objdir)/vi.o
 	$(CC) $< $(LDFLAGS) -lncurses -o $@

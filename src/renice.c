@@ -1,6 +1,6 @@
 #define _XOPEN_SOURCE 700
 
-#include <getopt.h>
+#include <unistd.h>
 #include <err.h>
 #include <stdlib.h>
 #include <sys/resource.h>

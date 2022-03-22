@@ -1892,6 +1892,8 @@ void yyerror(const char *s)
 static bool get_next_parser_string(int prompt)
 {
 	static char buf[BUFSIZ] = {0};
+	static const char *end = buf + sizeof(buf);
+	char tmp[64] = {0};
 	memset(buf, 0, sizeof(buf));
 
 	if (prompt)
@@ -1910,10 +1912,33 @@ static bool get_next_parser_string(int prompt)
 			eof = true;
 			break;
 		}
-		//printf("%02x\n", in);
+		//printf("H:%02x\n", in);
 
+again:
 		switch (in)
 		{
+			case 0033:
+				if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
+					exit(EXIT_FAILURE);
+				if (in != '[') goto again;
+				if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
+					exit(EXIT_FAILURE);
+				switch(in)
+				{
+					case 'C':
+						if ((ptr<end) && *(ptr + 1)) {
+							ptr++;
+							snprintf(tmp, 64, "\033[C");
+							goto print_tmp;
+						}
+						break;
+					case 'D':
+						if (ptr<=buf) break;
+						ptr--;
+						snprintf(tmp, 64, "\033[D");
+						goto print_tmp;
+				}
+				break;
 			case 0x0b:
 				in = 0x7f;
 				while(ptr-- > buf)
@@ -1924,26 +1949,31 @@ static bool get_next_parser_string(int prompt)
 			case 0x7f:
 				*ptr = '\0';
 				if(ptr>buf) ptr--;
-				goto print;
+				goto force_print;
 				break;
 			case '\n':
 				running = false;
-				goto print;
+				goto force_print;
 				break;
 			default:
 				*(ptr++) = in;
-print:				
-				if ((write(STDOUT_FILENO, &in, 1)) == -1)
-					exit(EXIT_FAILURE);
+				if (isprint(in))
+force_print:
+					if ((write(STDOUT_FILENO, &in, 1)) == -1)
+						exit(EXIT_FAILURE);
 				break;
 		}
+		continue;
+print_tmp:
+		if ((write(STDOUT_FILENO, tmp, strlen(tmp))) == -1)
+			exit(EXIT_FAILURE);
 	}
 
 	*ptr = '\0';
 
 	parser_string = buf;
 
-	printf("read:\"%s\"\n", parser_string);
+	//printf("read:\"%s\"\n", parser_string);
 
 	return eof;
 }

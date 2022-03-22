@@ -175,12 +175,12 @@ static int do_one_path(const char *tpath)
 			int namelen = pathlen + 1 + strlen(ent->d_name) + 1;
 			char *name = calloc(1, namelen);
 			if (name == NULL) {
-				warn("%s", ent->d_name);
+				warn("calloc: %s", ent->d_name);
 				failure = 1;
 			} else {
 				snprintf(name, namelen, "%s/%s", path, ent->d_name);
 				if (stat(name, &buf) == -1) {
-					warn("%s", name);
+					warn("stat: %s", name);
 					failure = 1;
 				} else if (lstat(name, &lbuf) == -1) {
 					warn("%s", name);

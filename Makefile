@@ -18,11 +18,12 @@ CFLAGS	:= \
 	-Wno-unused-label \
 	-Wall -Wextra \
 	-Wformat=2 \
+	-O0 \
 	-pedantic
 
 NDEBUG			:=
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) $(NDEBUG)
-LDFLAGS			:=
+LDFLAGS			:= 
 NCURSES_LD		:= 
 CAT				:= cat
 TAR				:= tar

@@ -1,6 +1,5 @@
 #define _XOPEN_SOURCE 700
 
-#include <getopt.h>
 #include <limits.h>
 #include <unistd.h>
 #include <stdio.h>

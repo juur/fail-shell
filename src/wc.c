@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-#include <getopt.h>
 #include <ctype.h>
 #include <string.h>
+#include <unistd.h>
 
 static int opt_bytes = 0;
 static int opt_chars = 0;
@@ -121,6 +121,7 @@ int main(int argc, char *argv[])
 			opt_lines = opt_words = opt_bytes = 1;
 	}
 
+	/* figure out of we're doing multiple files or not */
 	const bool summary = (argc - optind > 1) ? true : false;
 
 	if (optind == argc) {

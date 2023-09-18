@@ -179,6 +179,7 @@ static int isnumber(const char str[])
 
 static int do_mkfifo(mode_t mode, struct clause *list[], const char *file)
 {
+	return -1;
 }
 
 int main(int argc, char *argv[])

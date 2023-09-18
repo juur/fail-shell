@@ -348,8 +348,14 @@ do_group         : Do compound_list Done			{
 simple_command   : cmd_prefix cmd_word cmd_suffix	{ debug_printf("simple.1\n"); $$ = nSimple($1,$2,$3); }
                  | cmd_prefix cmd_word				{ debug_printf("simple.2\n"); $$ = nSimple($1,$2,NULL); }
                  | cmd_prefix						{ debug_printf("simple.3\n"); $$ = nSimple($1,NULL,NULL); }
-                 | cmd_name cmd_suffix				{ debug_printf("simple.4 (_,%s,%s)\n",$1,$2); $$ = nSimple(NULL,$1,$2); }
-                 | cmd_name							{ debug_printf("simple.5\n"); $$ = nSimple(NULL,$1,NULL); }
+                 | cmd_name cmd_suffix				{
+														debug_printf("simple.4 (_,%s,%s)\n", $1->value,$2->value);
+														$$ = nSimple(NULL,$1,$2); 
+													}
+                 | cmd_name							{ 
+														debug_printf("simple.5 (%s)\n", $1->value); 
+														$$ = nSimple(NULL,$1,NULL); 
+													}
                  ;
 cmd_name         : WORD							    { debug_printf("@cmd_name.1 [%s]\n", $1); $$ = nString($1); }	/* Apply rule.7a */
                  ;

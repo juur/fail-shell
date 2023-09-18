@@ -138,6 +138,7 @@ static int do_one_path(const char *tpath)
 	int failure = 0;
 	char *path = strdup(tpath);
 	int pathlen = strlen(path);
+	char *name;
 
 	if( path[pathlen-1] == '/' ) {
 		path[pathlen-1] = '\0';
@@ -145,8 +146,14 @@ static int do_one_path(const char *tpath)
 	}
 
 	DIR *dir = opendir(path);
+	struct dirent *ent = NULL;
+
 	if( dir == NULL ) {
-		errx(EXIT_FAILURE, "cannot access %s: %s", path, strerror(errno));
+		if (errno == ENOTDIR) {
+			name = path;
+			goto do_one_file;
+		}
+		errx(EXIT_FAILURE, "cannot access %s: %s [%d]", path, strerror(errno), errno);
 		free(path);
 		return errno;
 	}
@@ -155,7 +162,6 @@ static int do_one_path(const char *tpath)
 		printf("\n%s:\n", path);
 	printf("total %u\n", 0);
 
-	struct dirent *ent = NULL;
 	do {
 		errno = 0;
 		ent = readdir(dir);
@@ -173,12 +179,12 @@ static int do_one_path(const char *tpath)
 				continue;
 			struct stat buf, lbuf;
 			int namelen = pathlen + 1 + strlen(ent->d_name) + 1;
-			char *name = calloc(1, namelen);
-			if (name == NULL) {
+			if ((name = calloc(1, namelen)) == NULL) {
 				warn("calloc: %s", ent->d_name);
 				failure = 1;
 			} else {
 				snprintf(name, namelen, "%s/%s", path, ent->d_name);
+do_one_file:
 				if (stat(name, &buf) == -1) {
 					warn("stat: %s", name);
 					failure = 1;
@@ -193,7 +199,7 @@ static int do_one_path(const char *tpath)
 					}
 				}
 			}
-			if( name != NULL ) 
+			if( name != NULL && name != path) 
 				free(name);
 		}
 

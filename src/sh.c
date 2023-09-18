@@ -1,4 +1,5 @@
 #define _XOPEN_SOURCE 700
+//#define NDEBUG
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -7,7 +8,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <err.h>
-#include <regex.h>
+//#include <regex.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -161,14 +162,14 @@ static const map_t assignment_word	= { "ASSIGNMENT_WORD",	ASSIGNMENT_WORD };
 static const map_t name				= { "NAME",				NAME };
 #endif
 
-static const char *reg_assignment_str	= "^[a-zA-Z]([a-zA-Z0-9_]+)?=[^ \t\n]+";    // FIXME doesn't handle A="a a"
-static const char *reg_name_str			= "^[a-zA-Z]([a-zA-Z0-9_]+)?$";
+//static const char *reg_assignment_str	= "^[a-zA-Z]([a-zA-Z0-9_]+)?=[^ \t\n]+";    // FIXME doesn't handle A="a a"
+//static const char *reg_name_str			= "^[a-zA-Z]([a-zA-Z0-9_]+)?$";
 static const char *pad_str				= "";
 
 /* local variables */
 
-static regex_t reg_assignment;
-static regex_t reg_name;
+//static regex_t reg_assignment;
+//static regex_t reg_name;
 
 #if 0
 static const map_t *prev	= NULL;
@@ -231,7 +232,7 @@ inline static int isnumber(const char *str)
 	return 1;
 }
 
-static char **push(char *** list, char * ptr)
+static char **push(char ***list, char *ptr)
 {
 	size_t cnt = 0;
 	//printf("push with %p[%p], %s\n", list, *list, ptr);
@@ -579,7 +580,7 @@ static int cmd_read(int argc, char *argv[])
 			break;
 
 		start = pos;
-		delim = (pos > 0) ? ' ' : buf[pos-1];
+		delim = (pos > 0) ? buf[pos-1] : ' ';
 
 		while(pos <= len && !isifsspace(buf[pos], IFS)) 
 			pos++;
@@ -790,11 +791,16 @@ static void dump_envs(const shenv_t *restrict sh)
 {
 	const env_t *e = NULL;
 
-	for (size_t i = 0; (e = sh->private_envs[i]); i++)
+	for (size_t i = 0; (e = sh->private_envs[i]) != NULL; i++)
 	{
+		if (e->name == NULL)
+			break;
+
 		printf("%s=%s", e->name, e->val ? e->val : "");
-		if (e->readonly) printf(" (ro)");
-		if (e->exported) printf(" (expt)");
+		if (e->readonly)
+			fputs(" (ro)", stdout);
+		if (e->exported)
+			fputs(" (expt)", stdout);
 		fputc('\n', stdout);
 	}
 }
@@ -1039,6 +1045,12 @@ fail:
 	return NULL;
 }
 
+static size_t do_math(char *dst __attribute__((unused)), const char *func)
+{
+	debug_printf("do_math: <%s>\n", func);
+	return 0;
+}
+
 /* TODO this should be replaced with lex/yacc combination */
 char *expand(const char *restrict str, int *rc)
 {
@@ -1050,7 +1062,7 @@ char *expand(const char *restrict str, int *rc)
 	size_t len = 0;
 	env_t *env = NULL;
 
-	//printf("expand: %s\n", str);
+	debug_printf("expand: <%s>\n", str);
 
 	if (!src) return NULL;
 
@@ -1061,12 +1073,27 @@ char *expand(const char *restrict str, int *rc)
 		if (*src == '$') {
 			if (next == '(' && *(src+2) == '(') {
 				src+=3;
+				const char *start = src;	
+				debug_printf("expand_math: %s\n", src);
+				while (*src && *src != ')' && *(src+1) != ')') src++;
+				if (!*src) return NULL;
+				src+=2;
+				/* FIXME bounds checking */
+				debug_printf("expand_math: len(%ld)\n", src - start);
+				char *maths = strndup(start, src - start - 4);
+				dst += do_math(buf, maths);
+				free(maths);
+				continue;
 			} else if (next == '(') {
 				src+=2;
+				debug_printf("expand_subshell: %s\n", src);
+				while (*src++ != ')') ; 
 			} else if (next == '{') {
 				src+=2; tmp = var;
+				debug_printf("expand_var: %s\n", src);
 				while(*src && *src != '}') *tmp++ = *src++;
 				*tmp = '\0';
+				debug_printf("expand_var: %s\n", var);
 				val = parseenv(var, rc);
 				if (val && *val) {
 					dst += (len = min(BUFSIZ - strlen(buf), strlen(val)));
@@ -1078,8 +1105,10 @@ char *expand(const char *restrict str, int *rc)
 				continue;
 			} else if (isalpha(next)) {
 				src++; tmp = var;
+				debug_printf("expand_var: %s\n", src);
 				while(*src && !isblank(*src)) *tmp++ = *src++;
 				*tmp = '\0';
+				debug_printf("expand_var: %s\n", var);
 				env = getshenv(cur_sh_env, var);
 				if (env && *(env->val)) {
 					dst += (len = min(BUFSIZ - strlen(buf), strlen(env->val)));
@@ -1213,7 +1242,7 @@ int evaluate(node *n, int pad, int do_next)
 						}
 					}
 					for (size_t i = 0; tmpargs && tmpargs[i]; i++, tmpargc++) {
-						debug_printf("%*sarg[%lu]=%s\n", pad+2, pad_str, i, tmpargs[i]);
+						debug_printf("%*sarg[%lu]=<%s>\n", pad+2, pad_str, i, tmpargs[i]);
 					}
 				}
 
@@ -1225,19 +1254,27 @@ int evaluate(node *n, int pad, int do_next)
 						break;
 
 				pid_t chd_pid;
+
+				//printf("sh: about to fork (bi=%p)\n", (void *)bi);
 				
-				if ( (bi->name && bi->fork) || !bi->name)
+				if ( (bi && bi->name && bi->fork) || !bi || !bi->name) {
 					chd_pid = fork();
-				else
+					//printf("sh: fork returned %u\n", chd_pid);
+				} else
 					chd_pid = 0;
 
 				if (chd_pid == 0) {
+					//printf("sh: forked\n");
 					int rc;
 					if (bi->name)
 						rc = bi->func(tmpargc, tmpargs);
 					else {
+						//printf("sh: about to execvp(%s, %s)\n", n->arg1->evaluated,
+						//		tmpargs[0]);
 						rc = execvp(n->arg1->evaluated, tmpargs);
-						if (rc == -1) err(EXIT_FAILURE, "execvp: %s", n->arg1->evaluated);
+						//printf("sh: execvp returned\n");
+						if (rc)
+							err(EXIT_FAILURE, "execvp: %s", n->arg1->evaluated);
 					}
 				} else if (chd_pid == -1) {
 					warn("execvp");
@@ -1512,10 +1549,20 @@ inline static const map_t *lookup_token(const char *token)
 
 static void cleanup()
 {
+	/*
 	regfree(&reg_assignment);
 	regfree(&reg_name);
+	*/
 	if (here_doc_remaining) free(here_doc_remaining);
 	if (here_doc_word) free(here_doc_word);
+	if (cur_sh_env) {
+		if (cur_sh_env->private_envs) {
+			for (int i = 0; cur_sh_env->private_envs[i]; i++)
+				free(cur_sh_env->private_envs[i]);
+			free(cur_sh_env->private_envs);
+		}
+		free(cur_sh_env);
+	}
 }
 
 #if 0
@@ -1729,10 +1776,12 @@ static char *get_next_token(char *const str, char **next)
 
 static void parser_init()
 {
+	/*
 	if (regcomp(&reg_assignment, reg_assignment_str, REG_EXTENDED))
 		errx(EXIT_FAILURE, "regcomp");
 	if (regcomp(&reg_name, reg_name_str, REG_EXTENDED))
 		errx(EXIT_FAILURE, "regcomp");
+	*/
 	if ((cur_sh_env = calloc(1, sizeof(shenv_t))) == NULL)
 		err(EXIT_FAILURE, "calloc: cur_sh_env");
 	if ((cur_sh_env->private_envs = calloc(1, sizeof(env_t *))) == NULL)
@@ -1886,7 +1935,7 @@ again:
 
 void yyerror(const char *s)
 {
-	warnx("\n[%d:%d] %s", yyline, yyrow, s);
+	warnx("\nsh: unable to parse: [%d:%d] %s", yyline, yyrow, s);
 }
 
 static bool get_next_parser_string(int prompt)
@@ -1981,7 +2030,7 @@ print_tmp:
 extern void yyparse(void *);
 extern int yydebug;
 
-int main(/*int argc, char *argv[]*/)
+int main(void)
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stdin, NULL, _IONBF, 0);

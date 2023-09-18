@@ -11,14 +11,15 @@ CC		:= gcc
 CXX		:=
 CFLAGS	:= \
 	-std=c99 \
-	-ggdb3 \
+	-g \
 	-fno-builtin \
 	-Wno-unused-function \
 	-Wno-unused-parameter \
 	-Wno-unused-label \
 	-Wall -Wextra \
 	-Wformat=2 \
-	-O0 \
+	-fdiagnostics-color \
+	-O2 \
 	-pedantic
 
 NDEBUG			:=
@@ -48,7 +49,8 @@ ifeq ($(FAIL),1)
 FAIL_INC		:= ../fail-libc/include
 FAIL_LIB		:= ../fail-libc/lib
 # these don't work with fail-libc yet, at all
-broken_SRCS     += mount.c sh.c make.c vi.c
+#broken_SRCS     += mount.c make.c vi.c sh.c
+broken_SRCS		+= vi.c
 CFLAGS			+= -nostdinc -I$(FAIL_INC)
 LDFLAGS			+= -nostdlib -L$(FAIL_LIB) -lc $(FAIL_LIB)/crt1.o
 endif
@@ -114,14 +116,14 @@ $(objdir)/bin/expr: $(objdir)/expr.y.tab.o $(objdir)/expr.o
 
 
 $(objdir)/%.grammar.yy.o: $(objdir)/%.grammar.yy.c $(objdir)/%.grammar.yy.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
+	$(CC) $(subst,-fanalyzer,,$(CFLAGS)) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
 
 $(objdir)/%.grammar.yy.c $(objdir)/%.grammar.yy.h: $(srcdir)/src/%.l $(srcdir)/src/%.h
 	$(LEX) $(L_FLAGS) --header-file=$(objdir)/$(<F:%.l=%.grammar.yy.h) -o $(objdir)/$(<F:%.l=%.grammar.yy.c) $<
 
 
 $(objdir)/%.y.tab.o: $(objdir)/%.y.tab.c $(objdir)/%.tab.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
+	$(CC) $(subst,-fanalyzer,,$(CFLAGS)) $(CPPFLAGS) -D_XOPEN_SOURCE=700 -c -o $@ $<
 
 $(objdir)/%.y.tab.c $(objdir)/%.y.tab.h: $(srcdir)/src/%.y $(srcdir)/src/%.h
 	$(YACC) $(Y_FLAGS) -b $*.y -o $(objdir)/$(<F:%.y=%.y.tab.c) $<

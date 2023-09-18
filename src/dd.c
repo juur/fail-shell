@@ -493,7 +493,7 @@ static void perform_dd(char *restrict in_buf, char *restrict out_buf)
 	}
 }
 
-int main(const int argc, const char * argv[])
+int main(int argc, const char *argv[])
 {
 	fh_if = STDIN_FILENO;
 	fh_of = STDOUT_FILENO;
@@ -503,9 +503,10 @@ int main(const int argc, const char * argv[])
 	{
 		char *oper = NULL;
 		char *value = NULL;
+		int rc;
 
-		if ((sscanf(argv[i], "%m[a-z]=%m[^\n]", &oper, &value)) != 2)
-			errx(EXIT_FAILURE, "%s: invalid argument", argv[i]);
+		if ((rc = sscanf(argv[i], "%m[a-z]=%m[^\n]", &oper, &value)) != 2)
+			errx(EXIT_FAILURE, "invalid argument (%d): <%s> <%s> <%s>", rc, argv[i], oper, value);
 
 		const oper_t *op = NULL;
 		for (int opn = 0; oper_lst[opn].name; opn++)

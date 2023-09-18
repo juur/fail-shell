@@ -17,7 +17,7 @@ static void show_usage(void)
 
 int main(int argc, char *argv[])
 {
-	int which;
+	int which = PRIO_PROCESS;
 
 	{
 		int opt;

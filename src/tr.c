@@ -72,6 +72,9 @@ static const char *parse_list(char string[], int strnum)
 	char *end = ptr + strlen(string);
 	char *retptr = ret;
 
+	if (ret == NULL)
+		return NULL;
+
 	while (*ptr)
 	{
 		int left = end - ptr - 1;
@@ -210,9 +213,11 @@ inline static int min(const int a, const int b)
 	return a < b ? a : b;
 }
 
+__attribute__((nonnull))
 static void perform_tr(const char *string1, const int str1cls, const char *string2, const int str2cls)
 {
-	const int str2len = string2 ? strlen(string2)-1 : 0;
+	//const int str2len = string2 ? strlen(string2)-1 : 0;
+	const int str2len = strlen(string2)-1;
 
 	while (1)
 	{

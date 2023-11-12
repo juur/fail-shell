@@ -22,6 +22,7 @@ BSLASH	\\
 CHAR	[^\r\n]
 NEWLINE	(\n|\r|\r\n)
 WS		[ \t\v]
+NON_WS  [^ \t\v\r\n]
 EQ		=
 IDENT	[A-Za-z_0-9]
 SEMI	;
@@ -30,6 +31,12 @@ SEMI	;
 
 <*>{BSLASH}"#"/{CHAR}*		{ *yytext = '#'; yytext[1] = '\0'; yyleng = 1; yymore(); }
 <*>"#"{CHAR}*{NEWLINE}
+
+<*>"$"{IDENT}   {
+    yyless(1);
+	yy_push_state(EXP_VAR, yyscanner);
+	yymore();
+}
 
 <*>"${"		{ 
 	yy_push_state(EXP_VAR, yyscanner); 
@@ -61,19 +68,31 @@ SEMI	;
 
 <EXP_VAR>{
 	/* TODO: \} */
-	"}"		{ 
+
+    {IDENT}+/"}"		{ 
+                input(yyscanner);
 				yy_pop_state(yyscanner); 
 				yyextra->skip--;
-//				printf("--exp_var skip now %d\n", yyextra->skip);
 				
 				if (!yyextra->skip) {
-					//printf("--exp_var returning WORD \"%s\"\n", yytext);
 					yylval->string = strdup(yytext);
 					return WORD;
 				} else
 					yymore();
 			}
-	.		{ yymore(); }
+
+    {IDENT}+ { 
+        yy_pop_state(yyscanner);
+
+        if (!yyextra->skip) {
+            yylval->string = strdup(yytext);
+            return WORD;
+        } 
+    }
+
+    .					{
+        return 0; 
+    }
 }
 
 <EXP_SH>{
@@ -161,16 +180,21 @@ SEMI	;
 
 <ST_ASSIGNMENT>{
 	
-	{CHAR}/{WS}	{	
-						yymore(); 
+	{NON_WS}+	{	
+                        yy_pop_state(yyscanner);
+                        yylval->string = strdup(yytext);
+                        return ASSIGNMENT_WORD;
+						//yymore(); 
 					}
 	
 	/* We need to handle the case of A=1<EOF> */
-	{CHAR}+|{WS}+	{
+	/*{CHAR}+|{WS}+	{*/
+    /*
+	{CHAR}+	{
 				yy_pop_state(yyscanner);
 				yylval->string = strdup(yytext);
 				return ASSIGNMENT_WORD;
-			}
+			}*/
 }
 
 <ST_WORD>{
@@ -268,8 +292,7 @@ SEMI	;
 			}
 
 <*><<EOF>>	{
-	static int once = 0;
-	if(yyleng && (once = !once) ) {
+	if(yyleng && (yyextra->once = !yyextra->once) ) {
 		/*
 		if (YY_START == ST_ASSIGNMENT) {
 			if(yytext)
@@ -287,8 +310,10 @@ SEMI	;
 		//printf("--eof returning %s\n", yytext);
 		yylval->string = strdup(yytext);
 		return WORD;
-	} else
+	} else {
+        //printf("--eof returning 0 instead of %s in state %x\n", yytext, yy_top_state(yyscanner));
 		return 0;
+    }
 }
 
 %%

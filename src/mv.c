@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <getopt.h>
 #include <err.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -25,7 +24,7 @@ static int do_mv(const char *from, const char *to)
     struct stat sb_to, sb_from;
 
     if (stat(from, &sb_from)) {
-        warn("stat: <%s>", sb_from);
+        warn("stat: <%s>", from);
         return 1;
     }
 

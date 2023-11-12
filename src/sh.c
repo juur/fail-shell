@@ -1951,6 +1951,7 @@ static bool get_next_parser_string(int prompt)
 	char *ptr = buf;
 	ssize_t rc;
 	bool eof = false, running = true;;
+    bool insert = false;
 
 	while(running)
 	{
@@ -1966,6 +1967,10 @@ static bool get_next_parser_string(int prompt)
 again:
 		switch (in)
 		{
+            case 0x01: /* ^a */
+                printf("\r\033[C\033[C");
+                ptr = buf;
+                break;
 			case 0033:
 				if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
 					exit(EXIT_FAILURE);
@@ -2000,16 +2005,27 @@ again:
 				if(ptr>buf) ptr--;
 				goto force_print;
 				break;
+            case 0x17: /* ^w */
+                while (ptr >= buf && isspace(*ptr)) *(ptr--) = '\0';
+                while (ptr >= buf && !isspace(*ptr)) *(ptr--) = '\0';
+                while (ptr >= buf && isspace(*ptr)) *(ptr--) = '\0';
+                if (ptr != buf)
+                    ptr++;
+                /* TODO refresh line */
+                break;
 			case '\n':
 				running = false;
 				goto force_print;
 				break;
 			default:
 				*(ptr++) = in;
-				if (isprint(in))
+				if (isprint(in)) {
 force_print:
 					if ((write(STDOUT_FILENO, &in, 1)) == -1)
 						exit(EXIT_FAILURE);
+                } else
+                    fprintf(stderr, "Unknown character <0x%x>\n", in);
+                    
 				break;
 		}
 		continue;
@@ -2050,6 +2066,8 @@ int main(void)
 
 	while(1)
 	{
+        state.once = 0;
+
 		if (printf("# ") < 0)
 			exit(EXIT_FAILURE);
 

@@ -46,6 +46,7 @@ struct _node {
 
 typedef struct {
 	int skip;
+    int once;
 } shell_state_t;
 
 

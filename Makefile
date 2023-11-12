@@ -25,7 +25,11 @@ CFLAGS	:= \
 NDEBUG			:=
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) $(NDEBUG)
 LDFLAGS			:= 
+ifeq ($(FAIL),1)
 NCURSES_LD		:= 
+else
+NCURSES_LD		:= -lncurses
+endif
 CAT				:= cat
 TAR				:= tar
 YACC			:= byacc
@@ -50,7 +54,7 @@ FAIL_INC		:= ../fail-libc/include
 FAIL_LIB		:= ../fail-libc/lib
 # these don't work with fail-libc yet, at all
 #broken_SRCS     += mount.c make.c vi.c sh.c
-broken_SRCS		+= vi.c
+#broken_SRCS		+= vi.c
 CFLAGS			+= -nostdinc -I$(FAIL_INC)
 LDFLAGS			+= -nostdlib -L$(FAIL_LIB) -lc $(FAIL_LIB)/crt1.o
 endif
@@ -99,7 +103,7 @@ $(objdir)/bin/chown: $(objdir)/chgrp.o
 	$(CC) $< $(LDFLAGS) -o $@
 
 $(objdir)/bin/vi: $(objdir)/vi.o
-	$(CC) $< $(LDFLAGS) -lncurses -o $@
+	$(CC) $< $(LDFLAGS) $(NCURSES_LD) -o $@
 
 $(objdir)/bin/awk: $(objdir)/awk.y.tab.o $(objdir)/awk.grammar.yy.o $(objdir)/awk.o  
 	$(CC) $^ $(LDFLAGS) -o $@

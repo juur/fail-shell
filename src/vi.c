@@ -560,8 +560,10 @@ static int execute_line_cmd(const char *const str)
 			rc += execute_line_cmd(tmp);
 		free(cntstr);
 		return rc ? 1 :0;
-	} else if (!strncmp(str, "q", 1))
+	} else if (!strncmp(str, "q", 1)) {
+        clean();
 		exit(0);
+    }
 	return 0;
 }
 
@@ -886,7 +888,6 @@ int main(const int argc, const char *const argv[])
 	werase(stdscr);
 	draw();
 	wmove(stdscr,curs_y,curs_x);
-	wrefresh(stdscr);
 
 	int	buf[BUFSIZ];
 	int pos = 0;
@@ -909,7 +910,9 @@ int main(const int argc, const char *const argv[])
 		 * on the character in [:print:]
 		 */
 
-		if (ch == KEY_RESIZE) {
+        if (!ch) {
+            goto skip_sleep;
+        } else if (ch == KEY_RESIZE) {
 			resize(SIGWINCH);
 			ch = 0;
 		} else if (esc_capture && ch == ERR) {
@@ -980,8 +983,9 @@ int main(const int argc, const char *const argv[])
 		if (edit_mode != EM_LINE && edit_mode != EM_SEARCH)
 			wmove(stdscr, curs_y, curs_x);
 
-		wrefresh(stdscr);
+        wrefresh(stdscr);
 		
+skip_sleep:
 		if (nanosleep(&ts, NULL) == -1 && errno != EINTR)
 			err(1, "nanosleep");
 	}

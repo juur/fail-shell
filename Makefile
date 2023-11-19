@@ -10,8 +10,8 @@ DESTDIR	:=
 CC		:= gcc
 CXX		:=
 CFLAGS	:= \
-	-std=c99 \
-	-g \
+	-std=c11 \
+	-ggdb2 \
 	-fno-builtin \
 	-Wno-unused-function \
 	-Wno-unused-parameter \
@@ -19,8 +19,7 @@ CFLAGS	:= \
 	-Wall -Wextra \
 	-Wformat=2 \
 	-fdiagnostics-color \
-	-O2 \
-	-pedantic
+	-O3
 
 NDEBUG			:=
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) $(NDEBUG)

@@ -7,6 +7,8 @@
 #define debug_printf(...)
 #endif
 
+#include <fcntl.h>
+
 enum node_en {
 	N_NONE,
 	N_STRING,
@@ -49,6 +51,50 @@ typedef struct {
     int once;
 } shell_state_t;
 
+typedef struct {
+	char	**argv;
+	int		argc;
+	int		type;
+	int		pipe[2];
+} list_t;
+
+typedef struct {
+	char		*name;
+	char		*val;
+	int			 exported;
+	int			 readonly;
+	int			 freed;
+} env_t;
+
+/* for shenv_t */
+#define	MAX_TRAP	15
+#define	MAX_OPTS	10
+#define NUM_FDS		10
+
+/* for list_t */
+#define LIST_AND	0
+#define	LIST_OR		1
+
+
+typedef struct sh_exec_env {
+	struct sh_exec_env *parent;
+	
+	char	 *name;
+	int		  fds		[NUM_FDS];		/* fds from the parent that will be dup'd to the child */
+	mode_t	  umask;
+	void	 *traps		[MAX_TRAP + 1];
+	int		  options	[MAX_OPTS + 1];
+	void	 *functions;
+	pid_t	**last_cmds;
+	void	 *aliases;
+	env_t	**private_envs;
+	list_t	**sh_list;
+	char	**argv;
+	int		  argc;
+    int       rc;
+} shenv_t;
+
+
 
 extern node *nodeAppend(node*, node*);
 extern node *nIf(node*, node*, node*);			// arg3 = redirect_list
@@ -69,5 +115,7 @@ extern node *nFunc(char *, node *);
 extern void print_node(const node *, int, int);
 extern int evaluate(node *, int, int);
 extern void freeNode(node *, const bool);
+
+extern shenv_t *cur_sh_env;
 
 #endif /* _SH_H */

@@ -880,10 +880,17 @@ int main(const int argc, const char *const argv[])
 
 	init();
 
-	getmaxyx(stdscr, scr_height, scr_width);
+    scr_height = LINES;
+    scr_width  = COLS;
+
+	//getmaxyx(stdscr, scr_height, scr_width);
 
 	max_scr_x = scr_width - 1;
 	max_scr_y = scr_height - 2;
+
+    fprintf(stderr, "max_scr_=%d,%d scr_=%d,%d\n",
+            max_scr_x, scr_width,
+            max_scr_y, scr_height);
 
 	werase(stdscr);
 	draw();

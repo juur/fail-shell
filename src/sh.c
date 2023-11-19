@@ -22,15 +22,6 @@
 
 /* preprocessor defines */
 
-/* for shenv_t */
-#define	MAX_TRAP	15
-#define	MAX_OPTS	10
-#define NUM_FDS		10
-
-/* for list_t */
-#define LIST_AND	0
-#define	LIST_OR		1
-
 #define QUOTE_BASE		(1<<0)
 #define QUOTE_SPECIAL	(1<<1)
 #define QUOTE_DOUBLE	(1<<2)
@@ -44,39 +35,6 @@ struct builtin {
 	const int special;
 	const int fork;
 };
-
-typedef struct {
-	char	**argv;
-	int		argc;
-	int		type;
-	int		pipe[2];
-} list_t;
-
-typedef struct {
-	char		*name;
-	char		*val;
-	int			 exported;
-	int			 readonly;
-	int			 freed;
-} env_t;
-
-typedef struct sh_exec_env {
-	struct sh_exec_env *parent;
-	
-	char	 *name;
-	int		  fds		[NUM_FDS];		/* fds from the parent that will be dup'd to the child */
-	mode_t	  umask;
-	void	 *traps		[MAX_TRAP + 1];
-	int		  options	[MAX_OPTS + 1];
-	void	 *functions;
-	pid_t	**last_cmds;
-	void	 *aliases;
-	env_t	**private_envs;
-	list_t	**sh_list;
-	char	**argv;
-	int		argc;
-} shenv_t;
-
 
 typedef struct {
 	const char  *str;
@@ -196,7 +154,7 @@ static int	func_brace			= 0;
 static int	in_if				= 0;
 #endif
 
-static shenv_t *cur_sh_env = NULL;
+shenv_t *cur_sh_env = NULL;
 static char *parser_string = NULL;
 
 /* enviromental ones */
@@ -1028,8 +986,11 @@ static char *parseenv(const char *restrict val, int *restrict rc)
 			warnx("%s: parameter null or not set", env);
 			*rc = 1;
 			goto fail;
-		} else
-			ret = strdup("");
+		} else {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d", cur_sh_env->rc);
+			ret = strdup(buf);
+        }
 	} else {
 		return "";
 	}
@@ -1118,7 +1079,7 @@ char *expand(const char *restrict str, int *rc)
 			} else if (isdigit(next)) {
 				src+=2;
 			} else if (next == '?') {
-				dst += snprintf(buf, BUFSIZ, "%u", *rc);
+				dst += snprintf(buf, BUFSIZ, "%u", cur_sh_env->rc/**rc*/);
 				src+=2;
 			} else if (next == '*') {
 				src+=2;
@@ -1278,9 +1239,9 @@ int evaluate(node *n, int pad, int do_next)
 					}
 				} else if (chd_pid == -1) {
 					warn("execvp");
-					rc = 1;
+					rc = EXIT_FAILURE;
 				} else {
-					rc = 1;
+					rc = EXIT_SUCCESS;
 					int res = 0;
 					waitpid(chd_pid, &res, 0);
 					if (WIFEXITED(rc)) rc = WEXITSTATUS(res);
@@ -1951,11 +1912,11 @@ static bool get_next_parser_string(int prompt)
 	char *ptr = buf;
 	ssize_t rc;
 	bool eof = false, running = true;;
-    bool insert = false;
+    //bool insert = false;
 
 	while(running)
 	{
-		char in;
+		unsigned char in;
 		if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
 			exit(EXIT_FAILURE);
 		if (rc == 0) {
@@ -1970,6 +1931,13 @@ again:
             case 0x01: /* ^a */
                 printf("\r\033[C\033[C");
                 ptr = buf;
+                break;
+            case 0x04: /* ^d */
+                if (ptr == buf) {
+                    printf("exit\n");
+                    strcpy(buf, "exit\n");
+                    goto doparse;
+                }
                 break;
 			case 0033:
 				if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
@@ -2035,7 +2003,7 @@ print_tmp:
 	}
 
 	*ptr = '\0';
-
+doparse:
 	parser_string = buf;
 
 	//printf("read:\"%s\"\n", parser_string);
@@ -2045,6 +2013,15 @@ print_tmp:
 
 extern void yyparse(void *);
 extern int yydebug;
+static struct termios tios_save;
+
+pid_t main_pid;
+
+void restore_term(void)
+{
+    if (main_pid == getpid())
+        tcsetattr(STDOUT_FILENO, TCSANOW, &tios_save);
+}
 
 int main(void)
 {
@@ -2057,11 +2034,15 @@ int main(void)
 	shell_state_t state;
 	memset(&state, 0, sizeof(state));
 
+    main_pid = getpid();
+
 	struct termios term;
 
-	if (!tcgetattr(STDIN_FILENO, &term)) {
+	if (tcgetattr(STDIN_FILENO, &term) == 0) {
+        memcpy(&tios_save, &term, sizeof(struct termios));
 		term.c_lflag &= ~(ICANON|ECHO|ECHOE|ECHOK|ECHONL);
-		tcsetattr(STDIN_FILENO, TCSANOW, &term);
+		if (tcsetattr(STDIN_FILENO, TCSANOW, &term) == 0)
+            atexit(restore_term);
 	}
 
 	while(1)
@@ -2074,11 +2055,11 @@ int main(void)
 		if (get_next_parser_string(0))
 			break;
 
-		//printf("parsing '%s'\n", parser_string);
-		//yydebug = 1;
+		printf("parsing '%s'\n", parser_string);
+		yydebug = 1;
 		if(yylex_init_extra(&state, &scanner))
 			exit(EXIT_FAILURE);
-		//yyset_debug(1,scanner);
+		yyset_debug(1,scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);
 		yylex_destroy(scanner);

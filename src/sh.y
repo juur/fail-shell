@@ -115,7 +115,7 @@ complete_commands: complete_commands newline_list complete_command	{
 																	$$=nodeAppend($3,$1);
 																	}
                  |                                complete_command	{ debug_printf("complete_commands.2\n"); 
-																	evaluate($1,0,1);
+																	cur_sh_env->rc = evaluate($1,0,1);
 																	}
                  ;
 

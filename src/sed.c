@@ -1456,15 +1456,18 @@ static command_t *execute(const command_t *c, char *buf, const size_t len, const
 			{
 				char *tmp = strdup(holdspace);
 				if (tmp == NULL) err(EXIT_FAILURE, "execute");
-				strncpy(holdspace, buf, sizeof(holdspace));
-				strncpy(buf, tmp, len);
+                memset(holdspace, 0, sizeof(holdspace));
+				strncat(holdspace, buf, sizeof(holdspace));
+                memset(buf, 0, len);
+				strncat(buf, tmp, len);
 				free(tmp);
 				tmp = NULL;
 				strcpy(newbuf, buf);
 			}
 			break;
 		case 'h':
-			strncpy(holdspace, buf, sizeof(holdspace));
+            memset(holdspace, 0, sizeof(holdspace));
+			strncat(holdspace, buf, sizeof(holdspace));
 			strcpy(newbuf, buf);
 			break;
 		case 'H':
@@ -1472,7 +1475,8 @@ static command_t *execute(const command_t *c, char *buf, const size_t len, const
 			strcpy(newbuf, buf);
 			break;
 		case 'g':
-			strncpy(buf, holdspace, len);
+            memset(holdspace, 0, len);
+			strncat(buf, holdspace, len);
 			strcpy(newbuf, buf);
 			break;
 		case 'G':

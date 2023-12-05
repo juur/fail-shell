@@ -139,13 +139,14 @@ __attribute__((nonnull))
 static void get_window_size(int local_fd, unsigned short *x, unsigned short *y)
 {
     struct winsize winsize;
+    char *cols, *lines;
 
     if (isatty(local_fd) && ioctl(local_fd, TIOCGWINSZ, &winsize) != -1) {
         *x = winsize.ws_col;
         *y = winsize.ws_row;
-    } else if (getenv("COLUMNS") && getenv("LINES")) {
-        *y = atoi(getenv("COLUMNS"));
-        *x = atoi(getenv("LINES"));
+    } else if ((cols = getenv("COLUMNS")) && (lines = getenv("LINES"))) {
+        *y = atoi(cols);
+        *x = atoi(lines);
     } else {
         *x = 80;
         *y = 24;
@@ -175,7 +176,7 @@ static void show_usage(void)
           );
 }
 
-    __attribute__((nonnull))
+__attribute__((nonnull))
 static inline void clean_socket(int *sock)
 {
     shutdown(*sock, SHUT_RDWR);
@@ -201,6 +202,7 @@ static char parse_esc_char(const char *str __attribute__((unused)))
     return -1;
 }
 
+__attribute__((nonnull(2)))
 static int get_next_n(int fd, unsigned char *ptr, int len, int *inc)
 {
     int rc;
@@ -211,7 +213,7 @@ static int get_next_n(int fd, unsigned char *ptr, int len, int *inc)
         exit(EXIT_SUCCESS);
     else {
         if (inc)
-            inc += rc;
+            *inc += rc;
         return rc;
     }
 }
@@ -244,7 +246,7 @@ static int process_command(int fd, const unsigned char *raw, ssize_t raw_len)
         /* Subnegotiation */
         case SB:
             {
-                prefix = buf[i];
+                /* not used prefix = buf[i]; */
 
                 if (len == 1)
                     i += get_next_n(fd, buf + 2, 1, &len);
@@ -293,43 +295,49 @@ static int process_command(int fd, const unsigned char *raw, ssize_t raw_len)
                         break;
                     case TELOPT_TTYPE:
                         {
-                        if (buf[++i] != 1 || /* SEND */
-                                buf[++i] != IAC ||
-                                buf[++i] != SE)
-                            exit(EXIT_FAILURE);
-                        if (opt_debug)
-                            printf("DEBUG: received SB TELOPT_TTYPE SEND IAC SE\n");
-                        int tmp = 6 + strlen(getenv("TERM"));
-                        send = malloc(6 + tmp + 1);
-                        snprintf((char *)send, tmp + 1, "%c%c%c%c%s%c%c", IAC, SB, TELOPT_TTYPE, 0, getenv("TERM"), IAC, SE);
-                        if (opt_debug)
-                            printf("DEBUG: sending IAC SB TELOPT_TTYPE IS %s IAC SE\n", getenv("TERM"));
-                        write(fd, send, tmp);
-                        free(send);
+                            if (buf[++i] != 1 || /* SEND */
+                                    buf[++i] != IAC ||
+                                    buf[++i] != SE)
+                                exit(EXIT_FAILURE);
+
+                            if (opt_debug)
+                                printf("DEBUG: received SB TELOPT_TTYPE SEND IAC SE\n");
+
+                            const char *term = getenv("TERM");
+                            if (term == NULL)
+                                term = "dumb";
+                            int tmp = 6;
+                            tmp += strlen(term);
+                            send = malloc(6 + tmp + 1);
+                            snprintf((char *)send, tmp + 1, "%c%c%c%c%s%c%c", IAC, SB, TELOPT_TTYPE, 0, term, IAC, SE);
+                            if (opt_debug)
+                                printf("DEBUG: sending IAC SB TELOPT_TTYPE IS %s IAC SE\n", term);
+                            write(fd, send, tmp);
+                            free(send);
                         }
                         break;
 
                     case TELOPT_TSPEED:
                         {
-                        if (buf[++i] != 1 || /* SEND */
-                                buf[++i] != IAC ||
-                                buf[++i] != SE)
-                            exit(EXIT_FAILURE);
-                        if (opt_debug)
-                            printf("DEBUG: received SB TELOPT_TSPEED SEND IAC SE\n");
-                        char tspeed_buf[64];
-                        int tmp = snprintf(tspeed_buf, sizeof(tspeed_buf), 
-                                "%c%c%c%c%u,%u%c%c", 
-                                IAC, SB, TELOPT_TSPEED, 0,
-                                baud_lookup[cfgetispeed(&tios_save)],
-                                baud_lookup[cfgetospeed(&tios_save)],
-                                IAC, SE);
-                        if (opt_debug)
-                            printf("DEBUG: sending IAC SB TELOPT_TSPEED IS %u,%u IAC SE [%d bytes]\n",
-                                    baud_lookup[cfgetispeed(&tios_save)], 
+                            if (buf[++i] != 1 || /* SEND */
+                                    buf[++i] != IAC ||
+                                    buf[++i] != SE)
+                                exit(EXIT_FAILURE);
+                            if (opt_debug)
+                                printf("DEBUG: received SB TELOPT_TSPEED SEND IAC SE\n");
+                            char tspeed_buf[64];
+                            int tmp = snprintf(tspeed_buf, sizeof(tspeed_buf), 
+                                    "%c%c%c%c%u,%u%c%c", 
+                                    IAC, SB, TELOPT_TSPEED, 0,
+                                    baud_lookup[cfgetispeed(&tios_save)],
                                     baud_lookup[cfgetospeed(&tios_save)],
-                                    tmp);
-                        write(fd, tspeed_buf, tmp);
+                                    IAC, SE);
+                            if (opt_debug)
+                                printf("DEBUG: sending IAC SB TELOPT_TSPEED IS %u,%u IAC SE [%d bytes]\n",
+                                        baud_lookup[cfgetispeed(&tios_save)], 
+                                        baud_lookup[cfgetospeed(&tios_save)],
+                                        tmp);
+                            write(fd, tspeed_buf, tmp);
                         }
                         break;
 
@@ -339,16 +347,17 @@ static int process_command(int fd, const unsigned char *raw, ssize_t raw_len)
                 }
             }
             break;
-        /* Data Mark */
+            /* Data Mark */
         case DM:
             break;
-        /* Option Processing */
+            /* Option Processing */
         case WILL:
         case WONT:
         case DO:
         case DONT:
             {
                 prefix = buf[i];
+
                 if (opt_debug)
                     printf("DEBUG: received command %02d [%s %s]\n", buf[i], 
                             telnet_commands[buf[i]], telnet_options[buf[i+1]]);
@@ -372,17 +381,17 @@ static int process_command(int fd, const unsigned char *raw, ssize_t raw_len)
                                 case TELOPT_NAWS:
                                     {
                                         unsigned short x, y;
-                                    get_window_size(STDIN_FILENO, &x, &y);
-                                    send = (unsigned char[]){IAC, SB, TELOPT_NAWS, 
-                                        ((x & 0xff00) >> 8), 
-                                        ((x & 0x00ff)), 
-                                        ((y & 0xff00) >> 8), 
-                                        ((y & 0x00ff)),
-                                        IAC, SE};
-                                    if (opt_debug)
-                                        printf("DEBUG: sending IAC SB TELOPT_NAWS %u %u %u %u IAC SE\n",
-                                                send[3], send[4], send[5], send[6]);
-                                    write(fd, send, 9);
+                                        get_window_size(STDIN_FILENO, &x, &y);
+                                        send = (unsigned char[]){IAC, SB, TELOPT_NAWS, 
+                                            ((x & 0xff00) >> 8), 
+                                            ((x & 0x00ff)), 
+                                            ((y & 0xff00) >> 8), 
+                                            ((y & 0x00ff)),
+                                            IAC, SE};
+                                        if (opt_debug)
+                                            printf("DEBUG: sending IAC SB TELOPT_NAWS %u %u %u %u IAC SE\n",
+                                                    send[3], send[4], send[5], send[6]);
+                                        write(fd, send, 9);
                                     }
                                     break;
                             }
@@ -433,7 +442,7 @@ noopt:
                 }
             }
             break;
-        /* No operation */
+            /* No operation */
         case NOP:
             break;
         default:
@@ -448,6 +457,7 @@ noopt:
 }
 
 
+__attribute__((nonnull))
 static void do_telnet(const char *host, int port)
 {
     struct addrinfo hints = {0};

@@ -11,7 +11,7 @@ CC		:= gcc
 CXX		:=
 CFLAGS	:= \
 	-std=c11 \
-	-ggdb2 \
+	-ggdb3 \
 	-fno-builtin \
 	-Wno-unused-function \
 	-Wno-unused-parameter \

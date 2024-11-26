@@ -76,6 +76,7 @@ static char *file_mode(mode_t mode)
 
 static int print_single_entry(char *name, struct stat *sb, struct stat *lsb)
 {
+
 	if( opt_show_file_serial )
 		printf("%lu ", sb->st_ino);
 
@@ -175,6 +176,7 @@ static int do_one_path(const char *tpath)
 		} else if(ent->d_name[0] == '\0') {
 			continue;
 		} else {
+            //fprintf(stderr, "%d %d d_name = %s\n", opt_show_all, opt_show_long, ent->d_name);
 			if (!opt_show_all && ent->d_name[0] == '.')
 				continue;
 			struct stat buf, lbuf;

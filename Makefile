@@ -19,7 +19,7 @@ CFLAGS	:= \
 	-Wall -Wextra \
 	-Wformat=2 \
 	-fdiagnostics-color \
-	-O3
+	-Og
 
 NDEBUG			:=
 CPPFLAGS		:= -I$(srcdir) -I$(objdir) $(NDEBUG)

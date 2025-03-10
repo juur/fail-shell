@@ -89,8 +89,12 @@ static int print_single_entry(char *name, struct stat *sb, struct stat *lsb)
 
 		char tbuf[100];
 
+        //printf("ls: time(NULL)=%lx\n", time(NULL));
+
 		time_t point = sb->st_mtime;
 		time_t age = time(NULL) - point;
+
+        //printf("ls: point=%lx age=%lx\n", point, age);
 
 		strftime(tbuf, 100, age > SIX_MONTHS ? TIME_OLD : TIME_RECENT, localtime(&point));
 
@@ -154,7 +158,7 @@ static int do_one_path(const char *tpath)
 			name = path;
 			goto do_one_file;
 		}
-		errx(EXIT_FAILURE, "cannot access %s: %s [%d]", path, strerror(errno), errno);
+		warn("opendir: cannot access %s: %s [%d]", path, strerror(errno), errno);
 		free(path);
 		return errno;
 	}
@@ -170,7 +174,7 @@ static int do_one_path(const char *tpath)
 		if(ent == NULL && errno == 0) {
 			continue;
 		} else if(ent == NULL) {
-			warn("cannot read entry");
+			warn("readdir: cannot read entry in '%s'", path);
 			failure = 1;
 			continue;
 		} else if(ent->d_name[0] == '\0') {
@@ -191,12 +195,16 @@ do_one_file:
 					warn("stat: %s", name);
 					failure = 1;
 				} else if (lstat(name, &lbuf) == -1) {
-					warn("%s", name);
+					warn("lstat: %s", name);
 					failure = 1;
 				} else {
 					if( print_single_entry(name, &buf, &lbuf) )
 						failure = 1;
-					if (opt_recurse && S_ISDIR(buf.st_mode)) {
+					if (opt_recurse &&
+                            S_ISDIR(buf.st_mode) &&
+                            strcmp(".", ent->d_name) &&
+                            strcmp("..", ent->d_name))
+                    {
 						do_one_path(name);
 					}
 				}
@@ -223,6 +231,10 @@ int main(int argc, char *argv[])
 {
 	if( !isatty(STDOUT_FILENO) )
 		opt_show_one = 1;
+
+    //for (int i = 0; i < argc; i++) {
+    //    printf("main: argv[%d]=%s\n", i, argv[i]);
+    //}
 
 	int opt;
 	while( (opt = getopt(argc, argv, "CFRacdinplqrtu1")) != -1 )

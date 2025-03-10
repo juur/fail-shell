@@ -310,12 +310,12 @@ skip:
 		}
 
 		if (rd == -1) {
-			warn("%s", src);
+			warn("copy rd: %s", src);
 			goto err_free;
 		}
 
 		if (wr == -1) {
-			warn("%s", dst);
+			warn("copy wr: %s", dst);
 			goto err_free;
 		}
 	}

@@ -1230,8 +1230,12 @@ int evaluate(node *n, int pad, int do_next)
 					if (bi->name)
 						rc = bi->func(tmpargc, tmpargs);
 					else {
-						//printf("sh: about to execvp(%s, %s)\n", n->arg1->evaluated,
-						//		tmpargs[0]);
+                        /*
+						printf("sh: about to execvp(%s) [", n->arg1->evaluated);
+                        for (int i = 0; tmpargs[i]; i++)
+                            printf("argv[%d]='%s' ", i, tmpargs[i]);
+                        printf("\n");
+                        */
 						rc = execvp(n->arg1->evaluated, tmpargs);
 						//printf("sh: execvp returned\n");
 						if (rc)
@@ -2055,11 +2059,11 @@ int main(void)
 		if (get_next_parser_string(0))
 			break;
 
-		printf("parsing '%s'\n", parser_string);
-		yydebug = 1;
+		//printf("parsing '%s'\n", parser_string);
+		yydebug = 0;
 		if(yylex_init_extra(&state, &scanner))
 			exit(EXIT_FAILURE);
-		yyset_debug(1,scanner);
+		//yyset_debug(1,scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);
 		yylex_destroy(scanner);

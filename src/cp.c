@@ -24,6 +24,8 @@ static void show_usage()
 #define SL_DEREF_ALL	2
 #define SL_COPY_ALL		3
 
+#define CP_BUFFER   (64 * 1024U)
+
 static int opt_force = 0;
 static int opt_recurse = 0;
 static int opt_mode = SL_COPY_ALL;
@@ -296,10 +298,14 @@ skip:
 
 	/* perform the actual data copy */
 	{
-		char buf[BUFSIZ];
+		//char buf[CP_BUFFER];
+        char *buf;
+
+        if ((buf = malloc(CP_BUFFER)) == NULL)
+            err(EXIT_FAILURE, "malloc");
 
 		int rd = 0, wr = 0;;
-		while ((rd = read(src_fd, buf, BUFSIZ)) != -1)
+		while ((rd = read(src_fd, buf, CP_BUFFER)) != -1)
 		{
 			if (rd == 0)
 				break;
@@ -308,6 +314,8 @@ skip:
 				break;
 			}
 		}
+
+        free(buf);
 
 		if (rd == -1) {
 			warn("copy rd: %s", src);

@@ -1756,7 +1756,7 @@ static void parser_init()
 
 	for (size_t i = 0; environ && environ[i]; i++) {
 		char *tok = strchr(environ[i], '=');
-		char *env = strndup(environ[i], environ[i] - tok);
+		char *env = strndup(environ[i], tok - environ[i]);
 		setshenv(cur_sh_env, env, getenv(env));
 		free(env);
 	}
@@ -1774,6 +1774,10 @@ static void parser_init()
 		else
 			err(EXIT_FAILURE, "Unable to set SHLVL");
 	}
+
+    char *path_str = getenv("PATH");
+    if (path_str == NULL)
+        setshenv(cur_sh_env, "PATH", "/usr/local/bin:/usr/bin");
 
 	exportenv(env);
 
@@ -1922,12 +1926,11 @@ static bool get_next_parser_string(int prompt)
 	{
 		unsigned char in;
 		if ((rc = read(STDIN_FILENO, &in, 1)) == -1)
-			exit(EXIT_FAILURE);
+			err(EXIT_FAILURE, "read");
 		if (rc == 0) {
 			eof = true;
 			break;
 		}
-		//printf("H:%02x\n", in);
 
 again:
 		switch (in)
@@ -1994,7 +1997,7 @@ again:
 				if (isprint(in)) {
 force_print:
 					if ((write(STDOUT_FILENO, &in, 1)) == -1)
-						exit(EXIT_FAILURE);
+						err(EXIT_FAILURE, "write");
                 } else
                     fprintf(stderr, "Unknown character <0x%x>\n", in);
                     
@@ -2003,7 +2006,7 @@ force_print:
 		continue;
 print_tmp:
 		if ((write(STDOUT_FILENO, tmp, strlen(tmp))) == -1)
-			exit(EXIT_FAILURE);
+			err(EXIT_FAILURE, "write");
 	}
 
 	*ptr = '\0';
@@ -2054,7 +2057,7 @@ int main(void)
         state.once = 0;
 
 		if (printf("# ") < 0)
-			exit(EXIT_FAILURE);
+			err(EXIT_FAILURE, "prompt");
 
 		if (get_next_parser_string(0))
 			break;
@@ -2062,7 +2065,7 @@ int main(void)
 		//printf("parsing '%s'\n", parser_string);
 		yydebug = 0;
 		if(yylex_init_extra(&state, &scanner))
-			exit(EXIT_FAILURE);
+			err(EXIT_FAILURE, "yylex_init_extra");
 		//yyset_debug(1,scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);

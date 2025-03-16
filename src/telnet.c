@@ -56,7 +56,8 @@ static const char *const telnet_options[] = {
     [255]  = NULL
 };
 
-static int baud_lookup[] = {
+/*
+static const int baud_lookup[] = {
     [B0]       = 0,
     [B50]      = 50,
     [B75]      = 75,
@@ -89,6 +90,7 @@ static int baud_lookup[] = {
     [B3500000] = 3500000,
     [B4000000] = 4000000
 };
+*/
 
 enum {
     STATE_DO   = (1 << 0),
@@ -329,13 +331,13 @@ static int process_command(int fd, const unsigned char *raw, ssize_t raw_len)
                             int tmp = snprintf(tspeed_buf, sizeof(tspeed_buf), 
                                     "%c%c%c%c%u,%u%c%c", 
                                     IAC, SB, TELOPT_TSPEED, 0,
-                                    baud_lookup[cfgetispeed(&tios_save)],
-                                    baud_lookup[cfgetospeed(&tios_save)],
+                                    cfgetispeed(&tios_save),
+                                    cfgetospeed(&tios_save),
                                     IAC, SE);
                             if (opt_debug)
                                 printf("DEBUG: sending IAC SB TELOPT_TSPEED IS %u,%u IAC SE [%d bytes]\n",
-                                        baud_lookup[cfgetispeed(&tios_save)], 
-                                        baud_lookup[cfgetospeed(&tios_save)],
+                                        cfgetispeed(&tios_save), 
+                                        cfgetospeed(&tios_save),
                                         tmp);
                             write(fd, tspeed_buf, tmp);
                         }

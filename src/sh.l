@@ -11,7 +11,7 @@
 %}
 
 %x STRING_SQ STRING_DQ ST_WORD ST_VAR_EXP ST_ASSIGNMENT
-%x EXP_VAR EXP_SH
+%x EXP_VAR EXP_SH EXP_SH_INNER EXP_CALC
 
 %option bison-bridge noyywrap warn stack 
 %option nodefault debug reentrant extra-type="shell_state_t *"
@@ -46,12 +46,25 @@ SEMI	;
 //	printf("--exp_var skip now %d\n", yyextra->skip);
 }
 
+<*>"$(("    {
+    yy_push_state(EXP_CALC, yyscanner);
+    yyextra->skip++;
+}
+
+<EXP_SH,EXP_SH_INNER>"$("   {
+    yy_push_state(EXP_SH_INNER, yyscanner);
+    yyextra->skip++;
+	printf("--exp_sh_inner  skip now %d\n", yyextra->skip);
+    yymore();
+}
+
 <*>"$("		{ 
+    printf("--exp_sh  yytext=%s yyleng=%d\n", yytext, yyleng);
 	yy_push_state(EXP_SH, yyscanner);  
 	yyextra->skip++;
 //	if(yyextra->skip++)
-		yymore();
-//	printf("--exp_sh  skip now %d\n", yyextra->skip);
+		//yymore();
+	printf("--exp_sh  skip now %d\n", yyextra->skip);
 }
 
 <ST_WORD,ST_ASSIGNMENT,EXP_VAR,EXP_SH>{
@@ -60,7 +73,7 @@ SEMI	;
 		yy_push_state(yytext[yyleng-1] == '\"' ? STRING_DQ : STRING_SQ, yyscanner);
 		if (yyextra->skip) {
 			yyextra->skip++;
-//			printf("--skip now %d\n", yyextra->skip);
+			printf("--skip now %d\n", yyextra->skip);
 			yymore();
 		}
 	}
@@ -98,18 +111,41 @@ SEMI	;
 <EXP_SH>{
 	/* TODO: \) */
 	")"     { 
-				yy_pop_state(yyscanner); 
+                printf("--exp_sh: yytext=%s yyleng=%d\n", yytext, yyleng);
 				yyextra->skip--; 
-//				printf("--exp_sh: skip now %d\n", yyextra->skip);
+				printf("--exp_sh: skip now %d\n", yyextra->skip);
 
 				if(!yyextra->skip) {
-					//printf("--exp_sh  returning WORD \"%s\"\n", yytext);
+                    yytext[--yyleng]='\0';
+					printf("--exp_sh  returning WORD \"%s\"\n", yytext);
 					yylval->string = strdup(yytext);
-					return WORD;
-				} else
-					yymore();
+                    yy_pop_state(yyscanner); 
+                    return 0;
+				} 
+                yymore();
+				yy_pop_state(yyscanner); 
 			}
 	.		{ yymore(); }
+}
+
+<EXP_CALC>{
+    ")" {
+        yytext[--yyleng]='\0';
+        yyextra->skip--;
+        yy_pop_state(yyscanner);
+        return 0;
+    }
+    .   { yymore(); }
+}
+
+<EXP_SH_INNER>{
+    ")" {
+        yy_pop_state(yyscanner);
+        yyextra->skip--;
+        printf("--exp_sh_inner: skip now %d\n", yyextra->skip);
+        yymore();
+    }
+    .   { yymore(); }
 }
 
 <STRING_SQ>{
@@ -269,7 +305,7 @@ SEMI	;
 {WS}+
 
 {SEMI}		{ 
-				if(!yyextra->skip)
+				if(yyextra->skip)
 					yymore();
 				else
 					return ';'; 

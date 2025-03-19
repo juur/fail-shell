@@ -2063,10 +2063,10 @@ int main(void)
 			break;
 
 		//printf("parsing '%s'\n", parser_string);
-		yydebug = 0;
+		yydebug = 1;
 		if(yylex_init_extra(&state, &scanner))
 			err(EXIT_FAILURE, "yylex_init_extra");
-		//yyset_debug(1,scanner);
+		yyset_debug(1,scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);
 		yylex_destroy(scanner);

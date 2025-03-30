@@ -1774,12 +1774,14 @@ static void parser_init()
 		else
 			err(EXIT_FAILURE, "Unable to set SHLVL");
 	}
+	exportenv(env);
 
     char *path_str = getenv("PATH");
-    if (path_str == NULL)
-        setshenv(cur_sh_env, "PATH", "/usr/local/bin:/usr/bin");
+    if (path_str == NULL) {
+        if ((env = setshenv(cur_sh_env, "PATH", "/usr/local/bin:/usr/bin:/bin")) != NULL)
+            exportenv(env);
+    }
 
-	exportenv(env);
 
 	atexit(cleanup);
 }
@@ -2066,7 +2068,7 @@ int main(void)
 		yydebug = 0;
 		if(yylex_init_extra(&state, &scanner))
 			err(EXIT_FAILURE, "yylex_init_extra");
-		yyset_debug(0,scanner);
+		yyset_debug(0, scanner);
 		yy_scan_string(parser_string, scanner);
 		yyparse(scanner);
 		yylex_destroy(scanner);

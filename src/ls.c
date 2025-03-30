@@ -113,7 +113,7 @@ static int print_single_entry(char *name, struct stat *sb, struct stat *lsb)
 
 		char append = 0;
 		if( opt_append_slash ) {
-			if( (lsb->st_mode & S_IFLNK) == S_IFLNK ) append = '@';
+			if( S_ISLNK(lsb->st_mode) ) append = '@';
 			else if( S_ISDIR(sb->st_mode) ) append = '/';
 			else if( sb->st_mode & (S_IXUSR|S_IXGRP|S_IXOTH) ) append = '*';
 			else if( S_ISFIFO(sb->st_mode) ) append = '|';

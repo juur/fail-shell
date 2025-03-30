@@ -10,7 +10,7 @@ DESTDIR	:=
 CC		:= gcc
 CXX		:=
 CFLAGS	:= \
-	-std=c11 \
+	-std=c2x \
 	-ggdb3 \
 	-fno-builtin \
 	-Wno-unused-function \
@@ -27,7 +27,7 @@ LDFLAGS			:=
 ifeq ($(FAIL),1)
 NCURSES_LD		:= 
 else
-NCURSES_LD		:= -lncurses
+NCURSES_LD		:= -lncursesw_g -L.
 endif
 CAT				:= cat
 TAR				:= tar

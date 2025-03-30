@@ -315,7 +315,7 @@ SEMI	;
 {IDENT}+{EQ}/{CHAR} { yy_push_state(ST_ASSIGNMENT, yyscanner); yymore(); }
 {IDENT}+{EQ}        { yylval->string = strdup(yytext); return ASSIGNMENT_WORD; }
 
-{EQ}		{ return '='; }
+<ST_ASSIGNMENT>{EQ}		{ return '='; }
 
 {CHAR}		{
 				yyless(yyleng-1);

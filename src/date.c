@@ -8,12 +8,13 @@
 #include <time.h>
 #include <locale.h>
 
-static void show_usage()
+[[gnu::noreturn]] static void show_usage(FILE *fp, int rc)
 {
-	fprintf(stderr,
+	fprintf(fp,
 			"Usage: date [-u] [+format]\n"
-			"       date [-u] mmddhhmm[[cc]yy]\n");
-	exit(EXIT_FAILURE);
+			"       date [-u] mmddhhmm[[cc]yy]\n"
+            "       date -h\n");
+	exit(rc);
 }
 
 static int opt_tz_utc = 0;
@@ -25,15 +26,17 @@ int main(int argc, char *argv[])
 	{
 		int opt;
 
-		while ((opt = getopt(argc, argv, "u")) != -1)
+		while ((opt = getopt(argc, argv, "uh")) != -1)
 		{
 			switch (opt)
 			{
+                case 'h':
+                    show_usage(stdout, EXIT_SUCCESS);
 				case 'u':
 					opt_tz_utc = 1;
 					break;
 				default:
-					show_usage();
+					show_usage(stderr, EXIT_FAILURE);
 			}
 		}
 	}
@@ -43,7 +46,7 @@ int main(int argc, char *argv[])
 	if (optind == argc)
 		fmt = "%a %b %e %H:%M:%S %Z %Y";
 	else if (*argv[optind] != '+')
-		show_usage();
+		show_usage(stderr, EXIT_FAILURE);
 	else 
 		fmt = argv[optind]+1;
 

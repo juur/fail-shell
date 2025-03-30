@@ -878,6 +878,8 @@ int main(const int argc, const char *const argv[])
 	if (cur_buffer->lines)
 		cur_line = cur_buffer->lines[0];
 
+    //curses_trace(TRACE_TPUTS|TRACE_DATABASE|TRACE_CALLS);
+
 	init();
 
     scr_height = LINES;

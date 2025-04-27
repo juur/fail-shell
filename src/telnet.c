@@ -469,6 +469,7 @@ static void do_telnet(const char *host, int port)
 
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
 
     if (isatty(STDIN_FILENO)) {
         if (tcgetattr(STDIN_FILENO, &tios_save) == -1)
@@ -559,6 +560,8 @@ static void do_telnet(const char *host, int port)
         if (FD_ISSET(STDIN_FILENO, &fds_in)) {
             rc = read(STDIN_FILENO, buf, sizeof(buf));
             if (rc) {
+                if (opt_debug)
+                    printf("DEBUG: read %lu (max %lu) bytes from stdin\n", rc, sizeof(buf));
                 rc = write(remote_fd, buf, rc);
                 if (rc == -1)
                     err(EXIT_FAILURE, "write");
@@ -567,9 +570,11 @@ static void do_telnet(const char *host, int port)
 
         if (FD_ISSET(remote_fd, &fds_in)) {
             if (opt_debug)
-                printf("DEBUG: fd is in fds_in\n");
+                printf("DEBUG: remote_fd %ld is in fds_in\n", remote_fd);
 
             rc = bytes_read = read(remote_fd, buf, sizeof(buf));
+            if (opt_debug)
+                printf("DEBUG: read returned %u\n", rc);
 
             if (rc == -1)
                 err(EXIT_FAILURE, "read");

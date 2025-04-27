@@ -92,6 +92,7 @@ typedef struct sh_exec_env {
 	char	**argv;
 	int		  argc;
     int       rc;
+    node     *root;
 } shenv_t;
 
 

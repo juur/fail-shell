@@ -1006,14 +1006,14 @@ fail:
 	return NULL;
 }
 
-static size_t do_math(char *dst __attribute__((unused)), const char *func)
+static size_t do_math(char *dst __attribute__((unused)), const char *)
 {
 	debug_printf("do_math: <%s>\n", func);
 	return 0;
 }
 
 /* TODO this should be replaced with lex/yacc combination */
-char *expand(const char *restrict str, int *rc)
+char *expand(const char *str, int *rc)
 {
 	char buf[BUFSIZ] = {0};
 	char var[BUFSIZ] = {0};
@@ -1227,9 +1227,11 @@ int evaluate(node *n, int pad, int do_next)
 				if (chd_pid == 0) {
 					//printf("sh: forked\n");
 					int rc;
-					if (bi->name)
+					if (bi->name) {
+                        //printf("sh: calling <%s>\n", bi->name);
 						rc = bi->func(tmpargc, tmpargs);
-					else {
+                        exit(rc);
+                    } else {
                         /*
 						printf("sh: about to execvp(%s) [", n->arg1->evaluated);
                         for (int i = 0; tmpargs[i]; i++)
@@ -1283,14 +1285,15 @@ static node *newNode(const enum node_en type)
 
 void freeNode(node *restrict node, const bool free_next)
 {
+    debug_printf("freeNode()\n");
 	if (!node) return;
 
-	if(node->arg0)  { freeNode(node->arg0, true);	node->arg0 = NULL;		}
-	if(node->arg1)  { freeNode(node->arg1, true);	node->arg1 = NULL;		}
-	if(node->arg2)  { freeNode(node->arg2, true);	node->arg2 = NULL;		}
-	if(node->arg3)  { freeNode(node->arg3, true);	node->arg3 = NULL;		}
-	if(node->value) { free(node->value);			node->value = NULL;		}
-	if(node->evaluated) { free(node->evaluated);	node->evaluated = NULL; }
+	if(node->arg0)  { freeNode(node->arg0, free_next);	node->arg0 = NULL;		}
+	if(node->arg1)  { freeNode(node->arg1, free_next);	node->arg1 = NULL;		}
+	if(node->arg2)  { freeNode(node->arg2, free_next);	node->arg2 = NULL;		}
+	if(node->arg3)  { freeNode(node->arg3, free_next);	node->arg3 = NULL;		}
+	if(node->value) { free(node->value);			    node->value = NULL;		}
+	if(node->evaluated) { free(node->evaluated);	    node->evaluated = NULL; }
 
 	if(free_next && node->next) { freeNode(node->next, true); node->next = NULL; }
 	
@@ -1521,9 +1524,16 @@ static void cleanup()
 	if (here_doc_remaining) free(here_doc_remaining);
 	if (here_doc_word) free(here_doc_word);
 	if (cur_sh_env) {
+        if (cur_sh_env->root)
+            freeNode(cur_sh_env->root, true);
 		if (cur_sh_env->private_envs) {
-			for (int i = 0; cur_sh_env->private_envs[i]; i++)
+			for (int i = 0; cur_sh_env->private_envs[i]; i++) {
+                if (cur_sh_env->private_envs[i]->name)
+                    free (cur_sh_env->private_envs[i]->name);
+                if (cur_sh_env->private_envs[i]->val)
+                    free (cur_sh_env->private_envs[i]->val);
 				free(cur_sh_env->private_envs[i]);
+            }
 			free(cur_sh_env->private_envs);
 		}
 		free(cur_sh_env);
@@ -2029,7 +2039,8 @@ pid_t main_pid;
 void restore_term(void)
 {
     if (main_pid == getpid())
-        tcsetattr(STDOUT_FILENO, TCSANOW, &tios_save);
+        if (tcsetattr(STDOUT_FILENO, TCSANOW, &tios_save) < 0)
+            warn("restore_term: tcsetattr");
 }
 
 int main(void)
@@ -2052,7 +2063,10 @@ int main(void)
 		term.c_lflag &= ~(ICANON|ECHO|ECHOE|ECHOK|ECHONL);
 		if (tcsetattr(STDIN_FILENO, TCSANOW, &term) == 0)
             atexit(restore_term);
-	}
+        else
+            warn("main: tcsetattr");
+	} else
+        warn("main: tcgetattr");
 
 	while(1)
 	{

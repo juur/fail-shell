@@ -1,5 +1,4 @@
-/* vi.c - a partial implementation of POSIX.1-2017
- * Copyright © 2019 Ian Kirk. All rights reserved. */
+/* vi.c - a partial implementation of POSIX.1-2017 */
 
 #define _XOPEN_SOURCE 700
 
@@ -155,6 +154,30 @@ static void init(void)
 		errx(1, "keypad");
 }
 
+static int save_buffer(const buffer_t *buffer)
+{
+    fprintf(stderr, "save_buffer: %s\n", buffer->name);
+
+    FILE *f;
+    size_t ret;
+
+    if ((f = fopen(buffer->name, "w")) == NULL)
+        err(EXIT_FAILURE, "save_buffer: fopen");
+
+    for (ssize_t i = 0; buffer->lines[i] && i < buffer->used; i++)
+    {
+        ret = fwrite(buffer->lines[i]->line, buffer->lines[i]->used, 1, f);
+
+        if (ret != 1 && ferror(f)) {
+            err(EXIT_FAILURE, "save_buffer: fwrite is in ferror");
+        }
+    }
+
+    fclose(f);
+
+    return 0;
+}
+
 __attribute__((nonnull))
 static buffer_t *readfile(FILE *restrict f, char *restrict name)
 {
@@ -174,6 +197,7 @@ static buffer_t *readfile(FILE *restrict f, char *restrict name)
 		goto warnfail;
 
 	ssize_t pos = 0;
+    bool read_one = false;
 
 	while ((line = fgets(buf, sizeof(buf), f)) != NULL)
 	{
@@ -198,7 +222,22 @@ static buffer_t *readfile(FILE *restrict f, char *restrict name)
 			goto warnfail;
 
 		pos++;
+        read_one = true;
 	}
+
+    if (read_one == false) {
+        pos = 0;
+        ret->num = 256;
+        if ((ret->lines = calloc(ret->num, sizeof(line_t *))) == NULL)
+            goto warnfail;
+        if ((ret->lines[pos] = malloc(sizeof(line_t))) == NULL)
+            goto warnfail;
+        ret->lines[pos]->size = 2;
+        ret->lines[pos]->used = 1;
+        if ((ret->lines[pos]->line = strdup("\n")) == NULL)
+            goto warnfail;
+        pos++;
+    }
 
 	ret->used = pos;
 	free(name);
@@ -522,10 +561,12 @@ static void insert_char(const char c)
 	}
 
 	if (cur_line->used == cur_line->size) {
-		const size_t len = (cur_line->size + 128) & ~127;
+		const ssize_t len = (cur_line->size + 128) & ~127;
+        if (len <= cur_line->size)
+            errx(EXIT_FAILURE, "insert_char: new len < current line length!");
 		char *tmp = realloc(cur_line->line, len);
 		if (tmp == NULL)
-			err(1, "insert_char");
+			err(EXIT_FAILURE, "insert_char: realloc");
 		cur_line->line = tmp;
 		cur_line->size = len;
 	}
@@ -560,6 +601,8 @@ static int execute_line_cmd(const char *const str)
 			rc += execute_line_cmd(tmp);
 		free(cntstr);
 		return rc ? 1 :0;
+    } else if (!strcmp(str, "w")) {
+        save_buffer(cur_buffer);
 	} else if (!strncmp(str, "q", 1)) {
         clean();
 		exit(0);
@@ -871,7 +914,15 @@ int main(const int argc, const char *const argv[])
 	const char *name = (argc>1) ? argv[1] : "/etc/passwd";
 
 	FILE *f = fopen(name, "r");
+    if (f == NULL) {
+        if ((f = fopen(name, "w")) == NULL)
+            err(EXIT_FAILURE, "unable to open %s for writing", name);
+    }
+
+
 	cur_buffer = readfile(f, strdup(name));
+    fclose(f);
+
 	if (!cur_buffer)
 		errx(1, "unable to read file");
 
@@ -890,9 +941,15 @@ int main(const int argc, const char *const argv[])
 	max_scr_x = scr_width - 1;
 	max_scr_y = scr_height - 2;
 
-    fprintf(stderr, "max_scr_=%d,%d scr_=%d,%d\n",
+    fprintf(stderr, "max_scr_=%ld,%ld scr_=%ld,%ld\n",
             max_scr_x, scr_width,
             max_scr_y, scr_height);
+
+    fprintf(stderr, "cur_buffer=%p cur_buffer->lines=%p cur_buffer->lines[0]=%p cur_line=%p\n",
+            cur_buffer,
+            cur_buffer->lines,
+            cur_buffer->lines[0],
+            cur_line);
 
 	werase(stdscr);
 	draw();

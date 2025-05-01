@@ -402,7 +402,7 @@ static int cmd_pwd(/*int argc, char *argv[]*/)
 	if (getcwd(pwd, BUFSIZ) == NULL)
 		err(EXIT_FAILURE, NULL);
 	printf("%s\n", pwd);
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }
 
 static int cmd_cd(int argc, char *argv[])
@@ -441,6 +441,7 @@ static int cmd_cd(int argc, char *argv[])
 		fprintf(stderr, "%s: %s: %s\n", argv[0], dir, strerror(errno));
 		return EXIT_FAILURE;
 	}
+
 
 	char pwd[BUFSIZ];
 	if (getcwd(pwd, BUFSIZ) == NULL) {
@@ -643,7 +644,7 @@ static int cmd_basename(int argc, char *argv[])
 
 	if (argc < 2 || argc > 3) {
 		fprintf(stderr, "Usage: %s string [suffix]\n", argv[0]);
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 	//if (argc == 3)
 	//	suffix = argv[2];
@@ -653,7 +654,7 @@ static int cmd_basename(int argc, char *argv[])
 	// TODO implement suffix here
 
 	printf("%s\n", bname);
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }
 
 static int cmd_exit(const int ac, char *av[])
@@ -1228,9 +1229,9 @@ int evaluate(node *n, int pad, int do_next)
 					//printf("sh: forked\n");
 					int rc;
 					if (bi->name) {
-                        //printf("sh: calling <%s>\n", bi->name);
 						rc = bi->func(tmpargc, tmpargs);
-                        exit(rc);
+                        if (bi->fork)
+                            exit(rc);
                     } else {
                         /*
 						printf("sh: about to execvp(%s) [", n->arg1->evaluated);

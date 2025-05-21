@@ -1513,7 +1513,7 @@ static command_t *execute(const command_t *c, char *buf, const size_t len, const
 
 /* global functions */
 
-int main(const int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	/* process command line options */
 	{

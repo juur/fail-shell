@@ -156,7 +156,7 @@ static void init(void)
 
 static int save_buffer(const buffer_t *buffer)
 {
-    fprintf(stderr, "save_buffer: %s\n", buffer->name);
+    //fprintf(stderr, "save_buffer: %s\n", buffer->name);
 
     FILE *f;
     size_t ret;
@@ -941,7 +941,7 @@ int main(const int argc, const char *const argv[])
 	max_scr_x = scr_width - 1;
 	max_scr_y = scr_height - 2;
 
-    fprintf(stderr, "max_scr_=%ld,%ld scr_=%ld,%ld\n",
+    /*fprintf(stderr, "max_scr_=%ld,%ld scr_=%ld,%ld\n",
             max_scr_x, scr_width,
             max_scr_y, scr_height);
 
@@ -949,7 +949,7 @@ int main(const int argc, const char *const argv[])
             cur_buffer,
             cur_buffer->lines,
             cur_buffer->lines[0],
-            cur_line);
+            cur_line);*/
 
 	werase(stdscr);
 	draw();

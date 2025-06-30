@@ -11,19 +11,29 @@
 #include <errno.h>
 #include <limits.h>
 #include <uchar.h>
+//#include <wchar.h>
+//#include <locale.h>
+
+#if __has_attribute(counted_by)
+# define __counted_by(member)  __attribute__((counted_by(member)))
+#else
+# define __counted_by(member)
+#endif
 
 struct charmap_entry {
     struct charmap_entry *next;
-    char32_t codepoint;
+    //char32_t codepoint;
+    const char *codepoint;
     int len;
     int spacing;
-    unsigned char byteseq[];
+    unsigned char byteseq[] __counted_by(len);
 };
 
-static char *opt_charmap = NULL;
-static char *opt_sourcefile = NULL;
-static char *opt_code_set_name = NULL;
-static char *opt_name = NULL;
+static const char *const default_opt_charmap = "us-ascii";
+static const char *opt_charmap = default_opt_charmap;
+static const char *opt_sourcefile = NULL;
+static const char *opt_code_set_name = NULL;
+static const char *opt_name = NULL;
 static bool opt_force_create = false;
 
 [[gnu::nonnull]] static void show_usage(FILE *out)
@@ -75,7 +85,7 @@ static bool opt_force_create = false;
     if (errno == ERANGE && (ret == LONG_MAX || ret == LONG_MIN))
         return -1;
 
-    if (((uint32_t)ret) > UINT32_MAX)
+    if (((uint32_t)ret) > UINT_MAX)
         return -1;
 
     //printf("codepoint_conv: <%s> = %lu\n", buf, ret);
@@ -92,12 +102,12 @@ static bool opt_force_create = false;
     int pos;
     unsigned char *byteseq;
 
-    if ((byteseq = malloc(mb_cur_max)) == NULL) {
+    if ((byteseq = calloc(1, mb_cur_max + 1)) == NULL) {
         warn("byteseq_conv: malloc");
         return -1;
     }
 
-    memset(byteseq, 0, mb_cur_min);
+    //memset(byteseq, 0, mb_cur_min);
     *out = NULL;
 
     pos = 0;
@@ -174,6 +184,181 @@ static bool opt_force_create = false;
     return pos;
 }
 
+static const char *const collate_types[] = {
+    "copy", "upper", "lower", "alpha", "digit", "alnum", "space", "cntrl", "punct", "graph", "print", "xdigit", "blank", "charclass", "toupper", "tolower", NULL};
+
+[[gnu::nonnull]] static bool is_valid_chr_class(const char *text)
+{
+    for (int i = 0; collate_types[i]; i++)
+        if (!strcmp(text, collate_types[i]))
+            return true;
+
+    return false;
+}
+
+[[gnu::nonnull]] static int parse_localedef(FILE *fp)
+{
+    enum state_enum { LD_HEADER, LD_CTYPE, LD_COLLATE, LD_MONETARY, LD_NUMERIC, LD_TIME, LD_MESSAGES };
+
+    bool running;
+    char escape_char = '\\';
+    char comment_char = '#';
+    char buf[BUFSIZ];
+    char *line, *keyword, *arg;
+    ssize_t rc;
+    size_t line_len;
+    int line_num;
+    enum state_enum state;
+    bool line_break, invalid;
+
+    running = true;
+    line_break = false;
+    line = NULL;
+    keyword = NULL;
+    arg = NULL;
+    line_num = -1;
+    state = LD_HEADER;
+
+    while (running)
+    {
+        if ((rc = getline(&line, &line_len, fp)) == -1) {
+            //printf("getline == -1 at %d\n", line_num);
+            running = false;
+            continue;
+        }
+        
+        if (line == NULL) {
+            //printf("no line at %d\n", line_num);
+            continue;
+        }
+
+        line_num++;
+
+        if (*line == comment_char) {
+            //printf("skip comment at %d\n", line_num);
+            continue;
+        }
+
+        trim(line);
+
+        if (strlen(line) == 0) {
+            //printf("empty line at %d\n", line_num);
+            continue;
+        }
+
+        //printf("processing line at %d\n", line_num);
+
+        switch (state)
+        {
+            case LD_HEADER:
+                printf("LD_HEADER\n");
+                if (!strcmp("LC_CTYPE", line)) {
+                    state = LD_CTYPE;
+                    line_break = false;
+                    invalid = false;
+                } else if (!strcmp("LC_COLLATE", line)) {
+                    state = LD_COLLATE;
+                } else if (!strcmp("LC_MONETARY", line)) {
+                    state = LD_MONETARY;
+                } else if (!strcmp("LC_NUMERIC", line)) {
+                    state = LD_NUMERIC;
+                } else if (!strcmp("LC_TIME", line)) {
+                    state = LD_TIME;
+                } else if (!strcmp("LC_MESSAGES", line)) {
+                    state = LD_MESSAGES;
+                } else if ((rc = sscanf(line, "%ms %ms", &keyword, &arg)) == 2) {
+                    if (!strcmp("escape_char", keyword)) {
+                        escape_char = *arg;
+                    } else if (!strcmp("comment_char", keyword)) {
+                        comment_char = *arg;
+                    } else {
+                        warnx("invalid metadata on line %d", line_num);
+                    }
+                } else
+                    warnx("invalid line %d", line_num);
+                break;
+            case LD_CTYPE:
+                //printf("LD_CTYPE\n");
+                if (!strcmp("END LC_CTYPE", line)) {
+                    state = LD_HEADER;
+                } else {
+                    size_t offset = 0;
+                    if (!line_break) {
+                        if (sscanf(line, "%ms ", &keyword) != 1) {
+                            printf("no keyword?\n");
+                            continue;
+                        }
+                        buf[0] = '\0';
+                        offset = strlen(keyword);
+                        if (!is_valid_chr_class(keyword)) {
+                            warnx("invalid character class %s on line %d", keyword, line_num);
+                            invalid = true;
+                            continue;
+                        }
+                        invalid = false;
+                    }
+                    
+                    char *tmp;
+                    if (*(tmp = line + strlen(line)-1) == escape_char) {
+                        *tmp = '\0';
+                        line_break = true;
+                    } else
+                        line_break = false;
+   
+                    if (sscanf(line + offset, " %ms ", &arg) != 1) {
+                        printf("shit line\n");
+                        continue;
+                    }
+                    strcat(buf, arg);
+
+                    if (!line_break)
+                        printf("keyword=<%s> buf=<%s>\n", keyword, buf);
+
+                    if (!invalid) {
+                        // do stuff with it
+                    }
+                }
+                break;
+            case LD_COLLATE:
+                printf("LD_COLLATE\n");
+                if (!strcmp("END LC_COLLATE", line)) {
+                    state = LD_HEADER;
+                } else {
+                }
+                break;
+            case LD_MONETARY:
+                if (!strcmp("END LC_MONETARY", line)) {
+                    state = LD_HEADER;
+                } else {
+                }
+                break;
+            case LD_NUMERIC:
+                if (!strcmp("END LC_NUMERIC", line)) {
+                    state = LD_HEADER;
+                } else {
+                }
+                break;
+            case LD_TIME:
+                if (!strcmp("END LC_TIME", line)) {
+                    state = LD_HEADER;
+                } else {
+                }
+                break;
+            case LD_MESSAGES:
+                if (!strcmp("END LC_MESSAGES", line)) {
+                    state = LD_HEADER;
+                } else {
+                }
+                break;
+            default:
+                warnx("parse_localedef: unhandled state\n");
+                break;
+        }
+    }
+
+    return 0;
+}
+
 [[gnu::nonnull]] static int parse_charmap(FILE *fp)
 {
     enum state_enum { CM_HEADER, CM_CHARMAP, CM_WIDTHS };
@@ -184,12 +369,13 @@ static bool opt_force_create = false;
     int mb_cur_max = 1;
     struct charmap_entry *cme_new, *cme_prev, *cme_first;
     char *keyword, *arg, *line, *from, *to;
-    bool is_range, running;
+    bool is_range, running, is_ucs;
     char32_t from_u32, to_u32;
     ssize_t rc;
     size_t line_len;
     enum state_enum state; 
     int line_num, width;
+    char cp_tmp[32];
 
     keyword = NULL;
     arg = NULL;
@@ -201,6 +387,7 @@ static bool opt_force_create = false;
     cme_new = NULL;
     cme_prev = NULL;
     cme_first = NULL;
+    is_ucs = false;
 
     while (running)
     {
@@ -281,12 +468,35 @@ static bool opt_force_create = false;
                         to = NULL;
                     }
 
-                    from_u32 = codepoint_conv(from);
-                    if (is_range)
-                        to_u32 = codepoint_conv(to);
-                    else
-                        to_u32 = (uint32_t)-1;
+                    is_ucs = false;
+
+                    if (!strncmp(from, "<U", 2)) {
+                        from_u32 = codepoint_conv(from);
+                        if (from_u32 == -1U) {
+                            warnx("codepoint_conv failed on line %d", line_num);
+                            continue;
+                        }
+                        if (is_range && strncmp(to, "<U", 2)) {
+                            warnx("end of range is invalid on line %d", line_num);
+                            continue;
+                        } else if (is_range) {
+                            if ((to_u32 = codepoint_conv(to)) == -1U) {
+                                warnx("codepoint_conv failed on line %d", line_num);
+                                continue;
+                            }
+                        } else {
+                            to_u32 = -1;
+                        }
+
+                        is_ucs = true;
+                    } else
+                        to_u32 = from_u32 = -1;
                     
+                    if (!is_ucs && is_range) {
+                        warnx("invalid codepoints for a range on line %d", line_num);
+                        continue;
+                    }
+ 
                     //printf("from=<%s>[%4x] to=<%s>[%2x]\n",
                     //        from, from_u32, to ? to : "", to ? to_u32 : 0U);
 
@@ -316,7 +526,15 @@ static bool opt_force_create = false;
                         else {
                             cme_new->next = NULL;
                             cme_new->spacing = 1; /* TODO WIDTH_DEFAULT */
-                            cme_new->codepoint = from_u32 + i;
+                            
+                            if (is_ucs) {
+                                snprintf(cp_tmp, sizeof(cp_tmp), "<U%04X>", from_u32 + i);
+                                cme_new->codepoint = strdup(cp_tmp);
+                            } else {
+                                cme_new->codepoint = strdup(keyword);
+                            }
+
+                            //cme_new->codepoint = from_u32 + i;
                             cme_new->len = len;
                             memcpy(cme_new->byteseq, ret, len);
                             
@@ -333,6 +551,7 @@ static bool opt_force_create = false;
                 break;
 
             case CM_WIDTHS:
+                /* lots of duplication with CM_CHARMAP */
                 if (!strcmp(line, "END WIDTH")) {
                     state = CM_HEADER;
                 } else if ((rc = sscanf(line, "%ms %d", &keyword, &width)) != 2) {
@@ -348,11 +567,35 @@ static bool opt_force_create = false;
                         to = NULL;
                     }
 
-                    from_u32 = codepoint_conv(from);
-                    if (is_range)
-                        to_u32 = codepoint_conv(to);
-                    else
-                        to_u32 = (char32_t)-1;
+                    is_ucs = false;
+
+                    if (!strncmp(from, "<U", 2)) {
+                        from_u32 = codepoint_conv(from);
+                        if (from_u32 == -1U) {
+                            warnx("codepoint_conv failed on line %d", line_num);
+                            continue;
+                        }
+                        if (is_range && strncmp(to, "<U", 2)) {
+                            warnx("end of range is invalid on line %d", line_num);
+                            continue;
+                        } else if (is_range) {
+                            to_u32 = codepoint_conv(to);
+                            if (to_u32 == -1U) {
+                                warnx("codepoint_conv failed on line %d", line_num);
+                                continue;
+                            }
+                        } else {
+                            to_u32 = (uint32_t)-1;
+                        }
+
+                        is_ucs = true;
+                    } else
+                        from_u32 = to_u32 = -1;
+
+                    if (!is_ucs && is_range) {
+                        warnx("invalid codepoints for a range on line %d", line_num);
+                        continue;
+                    }
 
                     unsigned count;
 
@@ -360,16 +603,22 @@ static bool opt_force_create = false;
                     struct charmap_entry *cme, *loop;
                     bool found;
                     cme = cme_first;
-                    
+
                     for (unsigned i = 0; i < count; i++)
                     {
-                        if (cme->codepoint != from_u32+i) {
+                        if (is_ucs)
+                            snprintf(cp_tmp, sizeof(cp_tmp), "<U%04X>", from_u32+i);
+
+                        //if (cme->codepoint != from_u32+i)
+                        if (strcmp(cme->codepoint, is_ucs ? cp_tmp : keyword)) {
                             found = false;
                             for (loop = cme, cme = cme->next; !found && cme != loop; cme = cme->next ? cme->next : cme_first) {
                                 //printf("comparing %x with %x\n", cme->codepoint, from_u32 + i);
-                                if (cme->codepoint == from_u32+i)
+                                //if (cme->codepoint == from_u32+i)
+                                if (!strcmp(cme->codepoint, is_ucs ? cp_tmp : keyword))
                                     found = true;
                             }
+
                             if (!found)
                                 warnx("width without codepoint: %x", from_u32 + i);
                             else
@@ -378,6 +627,7 @@ static bool opt_force_create = false;
                         //printf("%x width is %d\n", from_u32 + i, width);
                     }
                 }
+
                 break;
         }
     }
@@ -385,11 +635,14 @@ static bool opt_force_create = false;
     if (cme_first == NULL)
         return -1;
 
-    /*for (struct charmap_entry *cme = cme_first; cme; cme = cme->next)
+    /*wchar_t tmp;
+    for (struct charmap_entry *cme = cme_first; cme; cme = cme->next)
     {
-        printf("cp: 0x%x len:%d width:%d <", cme->codepoint, cme->len, cme->spacing);
-        fwrite(cme->byteseq, 1, cme->len, stdout);
-        putchar('\n');
+        printf("cp: %s len:%d width:%d <", cme->codepoint, cme->len, cme->spacing);
+        mbstowcs(&tmp, (const char *)cme->byteseq, 1);
+        if (iswprint(tmp))
+            printf("%lc", tmp);
+        puts(">");
     }*/
 
     return 0;
@@ -397,6 +650,8 @@ static bool opt_force_create = false;
 
 int main(int argc, char *argv[])
 {
+    //setlocale(LC_ALL, "");
+
     {
         int opt;
 
@@ -433,13 +688,25 @@ bad_usage:
 
     opt_name = argv[optind++];
 
-    if (opt_charmap != NULL) {
-        FILE *charmap;
+    FILE *charmap;
 
-        if ((charmap = fopen(opt_charmap, "r")) == NULL)
-            err(EXIT_FAILURE, "unable to open charmap <%s>", opt_charmap);
+    if ((charmap = fopen(opt_charmap, "r")) == NULL)
+        err(EXIT_FAILURE, "unable to open charmap <%s>", opt_charmap);
 
-        parse_charmap(charmap);
-        fclose(charmap);
-    }
+    if (parse_charmap(charmap) == -1)
+        exit(EXIT_FAILURE);
+    fclose(charmap);
+
+    FILE *sourcefile;
+
+    if (opt_sourcefile) {
+        if ((sourcefile = fopen(opt_sourcefile, "r")) == NULL)
+            err(EXIT_FAILURE, "unable to open sourcefile <%s>", opt_sourcefile);
+    } else
+        sourcefile = stdin;
+
+    if (parse_localedef(sourcefile) == -1)
+        exit(EXIT_FAILURE);
+
+    fclose(sourcefile);
 }

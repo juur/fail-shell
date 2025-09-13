@@ -43,7 +43,7 @@ HELP2MAN		:= help2man
 DEPS			:= 1
 PACKAGE			:= fail-shell
 VERSION			:= $(shell date "+%Y-%m-%d")
-skip_SRCS		:= vi.c sh.c sh_old.c make.c expr.c
+skip_SRCS		:= vi.c sh.c sh_old.c expr.c
 broken_SRCS		:= awk.c sh_old.c
 extra_PACKAGES  := chown
 

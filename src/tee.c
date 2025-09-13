@@ -8,11 +8,30 @@
 #include <err.h>
 #include <signal.h>
 
-static _Noreturn void show_usage(int rc)
+static _Noreturn void show_version(FILE *fp, int rc)
 {
-    printf( "Usage: tee [-ai] [file..]\n\n"
+    fprintf(fp,
+            "tee 0.1.0\n"
+            "\n"
+            "Copyright (C) 2025 github.com/juur\n"
+           );
+    exit(rc);
+}
+
+static _Noreturn void show_usage(FILE *fp, int rc, const char *name)
+{
+    fprintf(fp,
+            "tee duplicates standard input\n"
+            "Usage: %s [-aihv] [file..]\n"
+            "\n"
+            "Options:\n"
+            "  -h    show this help\n"
             "  -a    append to each file\n"
-            "  -i    ignore SIGINT\n");
+            "  -i    ignore SIGINT\n"
+            "  -v    display version information\n"
+            "\n",
+            name
+            );
     exit(rc);
 }
 
@@ -38,13 +57,15 @@ int main(int argc, char *argv[])
     {
         int opt = 0;
 
-        while ((opt = getopt(argc, argv, "aih?")) != -1)
+        while ((opt = getopt(argc, argv, "aih?v")) != -1)
         {
             switch (opt)
             {
                 case 'h':
                 case '?':
-                    show_usage(EXIT_SUCCESS);
+                    show_usage(stdout, EXIT_SUCCESS, argv[0]);
+                case 'v':
+                    show_version(stdout, EXIT_SUCCESS);
                 case 'a':
                     opt_append_files = true;
                     break;
@@ -52,7 +73,7 @@ int main(int argc, char *argv[])
                     opt_ignore_sigint = true;
                     break;
                 default:
-                    show_usage(EXIT_FAILURE);
+                    show_usage(stderr, EXIT_FAILURE, argv[0]);
             }
         }
     }

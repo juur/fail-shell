@@ -286,7 +286,7 @@ skip:
 				warn("unlink: %s", dst);
 				goto err_free;
 			}
-			if ((dst_fd = open(dst, dst_flags)) == -1) {
+			if ((dst_fd = open(dst, dst_flags, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH)) == -1) {
 				warn("%s: deleted, but error on creating new:", dst);
 				goto err_free;
 			}

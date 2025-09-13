@@ -1026,7 +1026,7 @@ int main(const int argc, const char *const argv[])
 						cur_buffer->used);
 					wmove(stdscr, max_scr_y+1, 30);
 					if (push_digit || cmd_repeat>1)
-						wprintw(stdscr, "%ld", cmd_repeat);
+						wprintw(stdscr, "%d", cmd_repeat);
 					if (push_next) {
 						int *tmp = cmd_ch_buf;
 						while(*tmp) {

@@ -41,7 +41,9 @@ static int rmok(char *file)
 
 	fprintf(stdout, "cp: overwrite '%s'? ", file);
 	fflush(stdout);
-	fscanf(stdin, "%c", &yes);
+	if (fscanf(stdin, "%c", &yes) != 1) {
+		return 0;  /* on error, don't overwrite */
+	}
 
 	return yes == 'y';
 }
